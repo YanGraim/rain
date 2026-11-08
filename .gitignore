@@ -1,0 +1,11 @@
+# Rust
+/target/
+
+# Node / Tauri
+node_modules/
+dist/
+apps/desktop/src-tauri/target/
+
+# OS
+.DS_Store
+Thumbs.db
