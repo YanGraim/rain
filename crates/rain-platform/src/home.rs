@@ -66,6 +66,8 @@ pub(crate) fn macos_root(home: PathBuf, root: Root) -> PathBuf {
 }
 
 #[cfg(test)]
+// Fixtures are built inside a `tempfile` sandbox, never on the real disk.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::ffi::OsString;

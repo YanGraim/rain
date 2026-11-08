@@ -3,6 +3,8 @@
 use std::process::Command;
 
 #[test]
+// Spawns only the freshly built `rain` binary, which does nothing yet.
+#[allow(clippy::disallowed_methods)]
 fn workspace_builds() {
     // Library crates are linkable from the binary's test harness.
     assert_eq!(rain_core::VERSION, env!("CARGO_PKG_VERSION"));

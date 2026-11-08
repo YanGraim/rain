@@ -4,9 +4,13 @@ on:
   push:
     branches: [main, 'feat/**']
   pull_request:
+  workflow_dispatch:
 
+# A push to a branch with an open PR triggers both `push` and `pull_request`.
+# Keying on the branch name puts both in one group, so the later run cancels
+# the earlier and only one full run per commit survives.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -25,15 +29,25 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned by commit SHA; the comment is the tag it resolved from.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # rustup reads rust-toolchain.toml and installs the pinned toolchain.
       - name: Install toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: taiki-e/install-action@7c48f0a661edab95fdc666d1526d9ef945205245 # nextest
       - name: Format
         run: cargo fmt --all --check
+      # clippy.toml bans filesystem writes outside explicitly allowed scopes.
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo nextest run --locked --workspace
+      # Every clippy.toml entry must actually fire on ci/disallowed-probe.
+      - name: Disallowed-methods probe
+        shell: bash
+        run: ./scripts/check-disallowed.sh
+      # Test fakes must never ship in the release binary.
+      - name: No test features in release graph
+        shell: bash
+        run: ./scripts/check-release-features.sh
