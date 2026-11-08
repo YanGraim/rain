@@ -9,6 +9,7 @@ repository.workspace = true
 caseless = "0.2"
 serde_json = "1"
 thiserror = "2"
+rain-platform = { path = "../rain-platform" }
 unicode-normalization = "0.1"
 
 [dev-dependencies]

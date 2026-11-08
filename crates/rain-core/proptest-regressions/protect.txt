@@ -4,3 +4,6 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
+cc d4f411d0fbd258ac1876062aa3b8b473733ff098c85c102fb1ed0c48218b755f # shrinks to path = "/users/tester/library"
+cc 88b5216df7526754c83be4b52268f3323f52fae5c823107c676d6b82fa840056 # shrinks to path = "/users/tester/librAry/photos/id_ed25519"
+cc b0706c8bbb2957fcf26df0d7b5a1c798ce7de8737e6ef14fafd8e7f769d59a76 # shrinks to path = "/UsERs/TEsTER/.CONﬁG"

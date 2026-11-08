@@ -1,0 +1,58 @@
+# Built-in protection list. One absolute path per line; `~/` is below the
+# canonical home. A protected path covers everything below it. Matching
+# ignores case and Unicode normalization (see `normalize`).
+
+# System and shared locations.
+/System
+/usr
+/bin
+/sbin
+/private
+/etc
+/var
+/tmp
+/dev
+/cores
+/opt
+/Library
+/Applications
+/Volumes
+
+# User data and credentials.
+~/.ssh
+~/.gnupg
+~/.aws
+~/.kube
+~/.config/gcloud
+~/.docker
+~/.password-store
+~/Documents
+~/Desktop
+~/Downloads
+~/Applications
+~/Pictures/Photos Library.photoslibrary
+
+# Apple data, cloud sync and device backups.
+~/Library/Keychains
+~/Library/Photos
+~/Library/Mail
+~/Library/Messages
+~/Library/Safari
+~/Library/Cookies
+~/Library/Notes
+~/Library/Mobile Documents
+~/Library/CloudStorage
+~/Library/Group Containers
+~/Library/Containers/com.apple.mail
+~/Library/Containers/com.apple.Photos
+~/Library/Application Support/MobileSync
+~/Library/Application Support/AddressBook
+~/Library/Application Support/Calendars
+
+# Password managers and wallets.
+~/Library/Application Support/1Password
+~/Library/Application Support/Bitwarden
+~/Library/Application Support/Bitcoin
+~/Library/Application Support/Ethereum
+~/Library/Application Support/Electrum
+~/Library/Application Support/Exodus
