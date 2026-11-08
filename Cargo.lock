@@ -280,6 +280,7 @@ dependencies = [
  "proptest",
  "rain-platform",
  "serde_json",
+ "tempfile",
  "thiserror",
  "unicode-normalization",
 ]
