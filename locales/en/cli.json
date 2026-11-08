@@ -1,0 +1,14 @@
+{
+  "scan.cancelled": "Scan cancelled. No results were reported.",
+  "error.running-as-root": "Refusing to run as root. Run `rain scan` as your regular user.",
+  "error.unknown-rule": "Unknown rule: {rule}. Valid rules: {valid}",
+  "error.invalid-path": "Invalid path: {path}",
+  "table.header.rule": "Rule",
+  "table.header.path": "Path",
+  "table.header.size": "Size",
+  "table.total": "Total",
+  "table.skipped": {
+    "one": "{count} item skipped",
+    "other": "{count} items skipped"
+  }
+}

@@ -2,7 +2,9 @@
 
 pub mod clock;
 pub mod fs;
+pub mod messages;
 pub mod protect;
+pub mod size;
 pub mod walk;
 
 /// Crate version, shared across the workspace.

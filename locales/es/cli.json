@@ -1,0 +1,14 @@
+{
+  "scan.cancelled": "Análisis cancelado. No se informó ningún resultado.",
+  "error.running-as-root": "No se puede ejecutar como root. Ejecuta `rain scan` con tu usuario habitual.",
+  "error.unknown-rule": "Regla desconocida: {rule}. Reglas válidas: {valid}",
+  "error.invalid-path": "Ruta no válida: {path}",
+  "table.header.rule": "Regla",
+  "table.header.path": "Ruta",
+  "table.header.size": "Tamaño",
+  "table.total": "Total",
+  "table.skipped": {
+    "one": "{count} elemento omitido",
+    "other": "{count} elementos omitidos"
+  }
+}
