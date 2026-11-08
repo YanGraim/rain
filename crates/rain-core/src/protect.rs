@@ -1,7 +1,13 @@
-//! Protection list support: path normalization.
+//! Protection list: built-in protected paths and path normalization.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
+
+use rain_platform::{Platform, PlatformError, Root};
+
+use crate::fs::Fs;
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -46,6 +52,178 @@ fn normalize_component(name: &std::ffi::OsStr) -> OsString {
     }
 }
 
+/// Built-in protected paths, one per line; `~` stands for the home.
+const BUILTIN: &str = include_str!("protected.list");
+
+/// Why the protection list could not be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtectError {
+    /// The home could not be resolved, so home-relative entries cannot be
+    /// placed and nothing may be scanned.
+    Platform(PlatformError),
+    /// A list entry is relative or not fully resolved.
+    InvalidEntry(String),
+    /// A list entry repeats an earlier one after normalization.
+    DuplicateEntry(String),
+}
+
+impl fmt::Display for ProtectError {
+    // Developer-facing text only; the CLI maps variants to localized messages.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Platform(e) => write!(f, "cannot build protection list: {e}"),
+            Self::InvalidEntry(l) => write!(f, "invalid protection list entry: {l}"),
+            Self::DuplicateEntry(l) => write!(f, "duplicate protection list entry: {l}"),
+        }
+    }
+}
+
+impl std::error::Error for ProtectError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Platform(e) => Some(e),
+            Self::InvalidEntry(_) | Self::DuplicateEntry(_) => None,
+        }
+    }
+}
+
+impl From<PlatformError> for ProtectError {
+    fn from(e: PlatformError) -> Self {
+        Self::Platform(e)
+    }
+}
+
+/// A protected path in both its literal and normalized spelling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedPattern {
+    literal: PathBuf,
+    normalized: PathBuf,
+}
+
+/// Paths that must never be reported as candidates, whatever a rule or a
+/// user-supplied root says.
+///
+/// Matching is by whole components against both the literal and the
+/// normalized form, so `~/.SSH`, `~/.ßh` and an NFD spelling all hit `~/.ssh`
+/// while `~/.sshx` does not. Inputs that cannot be compared reliably
+/// (relative, non-UTF-8, or with `.`/`..` left over) are treated as protected.
+#[derive(Debug, Clone)]
+pub struct ProtectList {
+    patterns: Vec<NormalizedPattern>,
+    identities: BTreeSet<(u64, u64)>,
+}
+
+impl ProtectList {
+    /// Builds the embedded list, placing `~` entries below the platform home.
+    pub fn builtin(platform: &dyn Platform) -> Result<Self, ProtectError> {
+        let home = platform.resolve(Root::Home)?;
+        Ok(Self {
+            patterns: parse_list(BUILTIN, &home)?,
+            identities: BTreeSet::new(),
+        })
+    }
+
+    /// Records the `(dev, ino)` of every protected path that exists, so a
+    /// path that reaches one of them under another name (firmlink, hard
+    /// link to a directory, a spelling folding misses) is still caught.
+    /// Missing or unreadable entries are skipped: the name check covers them.
+    pub fn with_identities(mut self, fs: &dyn Fs) -> Self {
+        for pattern in &self.patterns {
+            let Ok(canonical) = fs.canonicalize(&pattern.literal) else {
+                continue;
+            };
+            if let Ok(meta) = fs.symlink_metadata(&canonical) {
+                self.identities.insert((meta.dev, meta.ino));
+            }
+        }
+        self
+    }
+
+    /// True if `canonical` is a protected path or lies below one.
+    pub fn is_protected(&self, canonical: &Path) -> bool {
+        let Some(normalized) = comparable(canonical) else {
+            return true;
+        };
+        self.patterns
+            .iter()
+            .any(|p| canonical.starts_with(&p.literal) || normalized.starts_with(&p.normalized))
+    }
+
+    /// True if `canonical` is an ancestor of (or equal to) a protected path,
+    /// so taking it whole would take protected data with it.
+    pub fn contains_protected(&self, canonical: &Path) -> bool {
+        let Some(normalized) = comparable(canonical) else {
+            return true;
+        };
+        self.patterns
+            .iter()
+            .any(|p| p.literal.starts_with(canonical) || p.normalized.starts_with(&normalized))
+    }
+
+    /// Name check plus identity check: `canonical` or any ancestor sharing
+    /// the `(dev, ino)` of a protected root makes it protected. An ancestor
+    /// that cannot be read fails closed.
+    pub fn is_protected_on(&self, fs: &dyn Fs, canonical: &Path) -> bool {
+        if self.is_protected(canonical) {
+            return true;
+        }
+        if self.identities.is_empty() {
+            return false;
+        }
+        canonical
+            .ancestors()
+            .any(|ancestor| match fs.symlink_metadata(ancestor) {
+                Ok(meta) => self.identities.contains(&(meta.dev, meta.ino)),
+                Err(_) => true,
+            })
+    }
+}
+
+/// Parses a protection list: one path per line, `#` comments and blank
+/// lines ignored, `~/` placed below `home`.
+///
+/// Relative entries, `~` alone, `~user`, `.`/`..` components and entries
+/// that normalize to an earlier one are rejected, so a malformed list stops
+/// the scan instead of silently protecting less.
+fn parse_list(text: &str, home: &Path) -> Result<Vec<NormalizedPattern>, ProtectError> {
+    let mut patterns: Vec<NormalizedPattern> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let invalid = || ProtectError::InvalidEntry(line.to_string());
+        let literal = match line.strip_prefix("~/") {
+            Some(rest) if !rest.is_empty() && Path::new(rest).is_relative() => home.join(rest),
+            Some(_) => return Err(invalid()),
+            None if line.starts_with('/') => PathBuf::from(line),
+            None => return Err(invalid()),
+        };
+        let normalized = comparable(&literal).ok_or_else(invalid)?;
+        if patterns.iter().any(|p| p.normalized == normalized) {
+            return Err(ProtectError::DuplicateEntry(line.to_string()));
+        }
+        patterns.push(NormalizedPattern {
+            literal,
+            normalized,
+        });
+    }
+    Ok(patterns)
+}
+
+/// Normalized form of an absolute, fully resolved, UTF-8 path; `None` when
+/// the path cannot be compared safely.
+fn comparable(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let clean = path.components().all(|c| match c {
+        Component::Normal(name) => name.to_str().is_some(),
+        Component::RootDir | Component::Prefix(_) => true,
+        Component::CurDir | Component::ParentDir => false,
+    });
+    clean.then(|| normalize(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,7 +241,7 @@ mod tests {
 
     /// Groups of spellings that a case- and normalization-insensitive
     /// filesystem treats as the same text.
-    const EQUIVALENT: &[&[&str]] = &[
+    pub(super) const EQUIVALENT: &[&[&str]] = &[
         &["a", "A"],
         &["x", "X"],
         &["1"],
@@ -221,5 +399,447 @@ mod tests {
         let input = Path::new("/ABC").join(raw).join("D\u{e9}");
         let expected = Path::new("/abc").join(raw).join("d\u{e9}");
         assert_eq!(normalize(&input), expected);
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::tests::EQUIVALENT;
+    use super::*;
+    use crate::fs::{FakeFs, Metadata};
+    use proptest::prelude::*;
+    use rain_platform::Os;
+    use std::io;
+    use std::time::SystemTime;
+    use unicode_normalization::UnicodeNormalization;
+
+    const HOME: &str = "/Users/Tester";
+
+    /// Returns a fixed, already canonical home. `FakePlatform` is not used
+    /// because it does not canonicalize, so it cannot stand in for a real root.
+    struct HomeAt(Result<PathBuf, PlatformError>);
+
+    impl Platform for HomeAt {
+        fn resolve(&self, _: Root) -> Result<PathBuf, PlatformError> {
+            self.0.clone()
+        }
+        fn is_root_user(&self) -> bool {
+            false
+        }
+        fn os(&self) -> Os {
+            Os::Macos
+        }
+    }
+
+    fn list_for(home: &str) -> ProtectList {
+        match ProtectList::builtin(&HomeAt(Ok(PathBuf::from(home)))) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        }
+    }
+
+    fn list() -> ProtectList {
+        list_for(HOME)
+    }
+
+    fn p(s: &str) -> PathBuf {
+        PathBuf::from(s.replace('~', HOME))
+    }
+
+    const REQUIRED: &[&str] = &[
+        "~/.ssh",
+        "~/.gnupg",
+        "~/Library/Keychains",
+        "/private",
+        "~/Documents",
+        "~/Desktop",
+        "~/Downloads",
+        "~/Pictures/Photos Library.photoslibrary",
+        "~/Library/Photos",
+        "~/Library/Mail",
+        "~/Library/Messages",
+        "/System",
+        "/usr",
+        "~/Library/Mobile Documents",
+        "~/Library/CloudStorage",
+        "~/Library/Application Support/MobileSync",
+        "~/Library/Group Containers",
+        "/Applications",
+        "/Library",
+        "~/Applications",
+        "/Volumes",
+        "/opt",
+        "~/Library/Safari",
+        "~/Library/Cookies",
+        "~/Library/Notes",
+        "~/Library/Application Support/AddressBook",
+        "~/Library/Application Support/Calendars",
+        "~/Library/Application Support/1Password",
+        "~/Library/Application Support/Bitwarden",
+        "~/.aws",
+        "~/.kube",
+        "~/.config/gcloud",
+        "~/.docker",
+        "~/.password-store",
+    ];
+
+    /// Splits text into tokens that each match one spelling in `EQUIVALENT`
+    /// (multi-letter spellings first), or a literal character.
+    fn tokens(text: &str) -> Vec<Result<usize, char>> {
+        let lower = text.to_lowercase();
+        let mut out = Vec::new();
+        let mut rest = lower.as_str();
+        while let Some(c) = rest.chars().next() {
+            let single = &rest[..c.len_utf8()];
+            let hit = ["ss", "fi", single]
+                .into_iter()
+                .filter(|t| rest.starts_with(t))
+                .find_map(|t| {
+                    EQUIVALENT
+                        .iter()
+                        .position(|g| g.contains(&t))
+                        .map(|g| (g, t.len()))
+                });
+            match hit {
+                Some((g, len)) => {
+                    out.push(Ok(g));
+                    rest = &rest[len..];
+                }
+                None => {
+                    out.push(Err(c));
+                    rest = &rest[c.len_utf8()..];
+                }
+            }
+        }
+        out
+    }
+
+    /// A spelling of `path` that APFS treats as the same name: every
+    /// foldable token is replaced by a random equivalent (ß/ss, ſ/s, Kelvin
+    /// K, ligatures, Greek, mixed case) and the result is NFC or NFD.
+    fn spelling_of(path: String) -> impl Strategy<Value = String> {
+        let toks = tokens(&path);
+        let n = toks.len();
+        (
+            prop::collection::vec(any::<usize>(), n),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(move |(picks, upper_literal, nfd)| {
+                let mut out = String::new();
+                for (tok, pick) in toks.iter().zip(picks) {
+                    match tok {
+                        Ok(g) => out.push_str(EQUIVALENT[*g][pick % EQUIVALENT[*g].len()]),
+                        Err(c) if upper_literal => out.extend(c.to_uppercase()),
+                        Err(c) => out.push(*c),
+                    }
+                }
+                if nfd {
+                    out.nfd().collect()
+                } else {
+                    out.nfc().collect()
+                }
+            })
+    }
+
+    fn protected_variant() -> impl Strategy<Value = String> {
+        let suffix = prop_oneof![
+            Just(String::new()),
+            Just("/id_ed25519".to_string()),
+            Just("/a/b".to_string()),
+        ];
+        (prop::sample::select(REQUIRED), suffix)
+            .prop_flat_map(|(base, suffix)| spelling_of(format!("{}{suffix}", p(base).display())))
+    }
+
+    /// Every ancestor of a required entry, as a string.
+    fn required_ancestors() -> Vec<String> {
+        let mut out: Vec<String> = REQUIRED
+            .iter()
+            .flat_map(|base| {
+                p(base)
+                    .ancestors()
+                    .skip(1)
+                    .map(|a| a.display().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        // FR-007
+        #[test]
+        fn protected_under_any_case_or_normalization(path in protected_variant()) {
+            prop_assert!(list().is_protected(Path::new(&path)), "{path:?}");
+        }
+
+        // FR-007: any spelling of an ancestor still contains protected data.
+        #[test]
+        fn ancestor_spelling_contains_protected(
+            path in prop::sample::select(required_ancestors()).prop_flat_map(spelling_of)
+        ) {
+            prop_assert!(list().contains_protected(Path::new(&path)), "{path:?}");
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn literal_form_is_protected() {
+        let list = list();
+        for base in REQUIRED {
+            assert!(list.is_protected(&p(base)), "{base}");
+            assert!(list.is_protected(&p(base).join("child")), "{base}");
+        }
+        // Covered by a broader entry rather than listed on their own.
+        for covered in ["/private/var", "/Library/Keychains", "/private/var/folders"] {
+            assert!(list.is_protected(Path::new(covered)), "{covered}");
+        }
+    }
+
+    // FR-007: a home spelling that folding does not map to itself (dotted
+    // capital I) still matches literally and in other cases below it.
+    #[test]
+    fn literal_home_spelling_is_matched() {
+        let home = "/Users/\u{130}stanbul";
+        let list = list_for(home);
+        assert!(list.is_protected(&Path::new(home).join(".ssh")));
+        assert!(list.is_protected(&Path::new(home).join(".SSH/config")));
+    }
+
+    // FR-007
+    #[test]
+    fn matching_is_by_whole_components() {
+        let list = list();
+        for free in [
+            "~/.sshx",
+            "~/.ssh-old",
+            "~/Documentsx",
+            "/Systemx",
+            "/usrlocal",
+            "~/Library/Caches/com.example",
+            "~/Library/Logs/x.log",
+            "~/Library/MailData",
+            "/Applicationsx",
+            "/Volumesx",
+            "~/Library/CloudStorageOld",
+            "~/.config/other",
+        ] {
+            assert!(!list.is_protected(&p(free)), "{free}");
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn parent_of_protected_is_not_candidate() {
+        let list = list();
+        for parent in ["/", "/Users", HOME, "~/Library", "~/Pictures", "~/.config"] {
+            let parent = p(parent);
+            assert!(list.contains_protected(&parent), "{}", parent.display());
+            assert!(!list.is_protected(&parent), "{}", parent.display());
+        }
+        assert!(list.contains_protected(&p("/USERS/tester/LIBRARY")));
+        assert!(!list.contains_protected(&p("~/Library/Caches")));
+        assert!(!list.contains_protected(&p("~/Library/Caches/com.example")));
+        assert!(!list.contains_protected(&p("~/Projects/node_modules")));
+    }
+
+    // FR-007: the M1 rules scan these, so they must stay unprotected.
+    #[test]
+    fn rule_roots_are_not_protected() {
+        let list = list();
+        for free in [
+            "~/Library/Caches",
+            "~/Library/Logs",
+            "~/Library/Developer/Xcode/DerivedData",
+            "~/Library/Developer/Xcode/DerivedData/App-abc",
+        ] {
+            assert!(!list.is_protected(&p(free)), "{free}");
+            assert!(!list.contains_protected(&p(free)), "{free}");
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn trailing_slash_does_not_change_the_answer() {
+        let list = list();
+        assert!(list.is_protected(&p("~/.ssh/")));
+        assert!(list.contains_protected(Path::new("/Users/")));
+        assert!(!list.is_protected(Path::new("/Users/")));
+    }
+
+    // FR-007
+    #[test]
+    fn home_equal_to_users_protects_below_but_not_itself() {
+        let list = list_for("/Users");
+        assert!(list.contains_protected(Path::new("/Users")));
+        assert!(!list.is_protected(Path::new("/Users")));
+        assert!(list.is_protected(Path::new("/Users/.ssh")));
+    }
+
+    fn literals(text: &str) -> Result<Vec<PathBuf>, ProtectError> {
+        parse_list(text, Path::new(HOME)).map(|v| v.into_iter().map(|p| p.literal).collect())
+    }
+
+    // FR-007
+    #[test]
+    fn builtin_entries_are_absolute_and_unique() {
+        let entries = match literals(BUILTIN) {
+            Ok(e) => e,
+            Err(e) => panic!("builtin list is invalid: {e}"),
+        };
+        assert!(entries.iter().all(|e| e.is_absolute()));
+        let mut normalized: Vec<_> = entries.iter().map(|e| normalize(e)).collect();
+        normalized.sort();
+        normalized.dedup();
+        assert_eq!(normalized.len(), entries.len());
+        for base in REQUIRED {
+            assert!(entries.contains(&p(base)), "{base} missing from the list");
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn parse_skips_comments_and_blank_lines() {
+        assert_eq!(
+            literals("# c\n\n  /System  \n~/.ssh\n"),
+            Ok(vec![PathBuf::from("/System"), p("~/.ssh")])
+        );
+    }
+
+    // FR-007
+    #[test]
+    fn parse_rejects_invalid_entries() {
+        for bad in [
+            "System",
+            "~",
+            "~/",
+            "~user/x",
+            "./x",
+            "/a/../b",
+            "~/a/../../etc",
+            "/a\n/A",
+            "~/.SSH\n~/.ssh",
+        ] {
+            assert!(literals(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn residual_dot_components_fail_closed() {
+        let list = list();
+        for odd in [
+            "~/Library/Caches/../../.ssh",
+            "~/Library/Caches/..",
+            "./x",
+            "x/y",
+            "",
+        ] {
+            let path = p(odd);
+            assert!(list.is_protected(&path), "{odd}");
+            assert!(list.contains_protected(&path), "{odd}");
+        }
+    }
+
+    // FR-007
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_component_fails_closed() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let list = list();
+        let path = p("~/Library/Caches").join(OsStr::from_bytes(b"\xffx"));
+        assert!(list.is_protected(&path));
+        assert!(list.contains_protected(&path));
+    }
+
+    // FR-007: the platform accepts these homes; the protection list must not.
+    #[test]
+    fn home_inside_system_locations_is_protected() {
+        for home in [
+            "/System",
+            "/usr",
+            "/private/var",
+            "/private/var/root",
+            "/usr/local/u",
+        ] {
+            let list = list_for(home);
+            let home = Path::new(home);
+            assert!(list.is_protected(home), "{}", home.display());
+            assert!(list.is_protected(&home.join("Library/Caches/x")));
+        }
+    }
+
+    // FR-007
+    #[test]
+    fn unresolvable_home_is_an_error() {
+        let err = ProtectList::builtin(&HomeAt(Err(PlatformError::HomeMissing)));
+        assert_eq!(
+            err.map(|_| ()),
+            Err(ProtectError::Platform(PlatformError::HomeMissing))
+        );
+    }
+
+    fn dir(dev: u64, ino: u64) -> Metadata {
+        Metadata {
+            is_dir: true,
+            is_symlink: false,
+            dev,
+            ino,
+            nlink: 2,
+            blocks: 0,
+            len: 0,
+            mtime: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    /// `~/.ssh` also reachable as `/Users/Shared/Alias`, as a firmlink or a
+    /// hard-linked directory would make it.
+    fn aliased_fs() -> FakeFs {
+        let mut fs = FakeFs::new();
+        fs.insert("/", dir(1, 2))
+            .insert("/Users", dir(1, 3))
+            .insert(HOME, dir(1, 4))
+            .insert(p("~/.ssh"), dir(1, 50))
+            .insert("/Users/Shared", dir(1, 5))
+            .insert("/Users/Shared/Alias", dir(1, 50))
+            .insert("/Users/Shared/Alias/keys", dir(1, 51))
+            .insert("/Users/Shared/Other", dir(1, 60))
+            .insert("/Users/Shared/Other/f", dir(1, 61));
+        fs
+    }
+
+    // FR-007
+    #[test]
+    fn ancestor_with_protected_identity_is_protected() {
+        let fs = aliased_fs();
+        let list = list().with_identities(&fs);
+        let alias = Path::new("/Users/Shared/Alias/keys");
+        assert!(!list.is_protected(alias), "name check alone misses it");
+        assert!(list.is_protected_on(&fs, alias));
+        assert!(list.is_protected_on(&fs, Path::new("/Users/Shared/Alias")));
+        assert!(!list.is_protected_on(&fs, Path::new("/Users/Shared/Other/f")));
+    }
+
+    // FR-007
+    #[test]
+    fn identity_check_still_applies_names() {
+        let fs = aliased_fs();
+        let list = list().with_identities(&fs);
+        assert!(list.is_protected_on(&fs, &p("~/.SSH/config")));
+    }
+
+    // FR-007
+    #[test]
+    fn unreadable_ancestor_fails_closed() {
+        let mut fs = aliased_fs();
+        fs.fail_with("/Users/Shared/Other", io::ErrorKind::PermissionDenied);
+        let list = list().with_identities(&fs);
+        assert!(list.is_protected_on(&fs, Path::new("/Users/Shared/Other/f")));
     }
 }

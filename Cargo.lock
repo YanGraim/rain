@@ -278,6 +278,7 @@ version = "0.1.0"
 dependencies = [
  "caseless",
  "proptest",
+ "rain-platform",
  "serde_json",
  "thiserror",
  "unicode-normalization",
