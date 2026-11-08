@@ -3,15 +3,15 @@ name: CI
 on:
   push:
     branches: [main, 'feat/**']
-  pull_request:
   workflow_dispatch:
 
-# A push to a branch with an open PR triggers both `push` and `pull_request`.
-# Keying on the branch name puts both in one group, so the later run cancels
-# the earlier and only one full run per commit survives.
+# Only `push` triggers CI: a PR shows the checks of its head commit, so a
+# separate `pull_request` trigger would just run everything twice and leave
+# cancelled duplicates in the PR. A newer push to the same branch cancels the
+# older run; runs on main are never cancelled so every main commit is checked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
