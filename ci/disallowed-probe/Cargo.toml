@@ -1,0 +1,9 @@
+# Not part of the workspace: this crate exists only to prove that every entry
+# in the root clippy.toml fires. It must FAIL clippy; see scripts/check-disallowed.sh.
+[package]
+name = "disallowed-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
