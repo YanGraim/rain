@@ -2,11 +2,13 @@
 //! the same path, the earlier one keeps it (ADR 0005), so more specific
 //! rules come first.
 
+mod macos;
+
 use crate::model::RuleId;
 use crate::rule::Rule;
 
-/// Built-in rules, most specific first. Concrete rules are added in later changes.
-static BUILTIN: &[&dyn Rule] = &[];
+/// Built-in rules, most specific first.
+static BUILTIN: &[&dyn Rule] = &[&macos::HOMEBREW_CACHE, &macos::XCODE_DERIVED_DATA];
 
 pub fn builtin() -> &'static [&'static dyn Rule] {
     BUILTIN
@@ -107,6 +109,30 @@ mod tests {
         let err = select_from(&registry, &["z.first", "nope"]).err().unwrap();
         assert_eq!(err.id, "nope");
         assert_eq!(err.valid, [RuleId::new("a.second"), RuleId::new("z.first")]);
+    }
+
+    // FR-002, ADR 0005: more specific rules come first, so the Homebrew
+    // cache keeps its bytes when the user caches rule also sees them.
+    #[test]
+    fn builtin_starts_with_homebrew_then_xcode() {
+        assert_eq!(
+            ids(builtin()).get(..2),
+            Some(&["macos.homebrew.cache", "macos.xcode.derived-data"][..])
+        );
+    }
+
+    // FR-013: every builtin rule name is a catalogue key, so it exists in
+    // all locales (checked by the catalogue tests).
+    #[test]
+    fn builtin_names_are_message_keys() {
+        use crate::messages::MessageKey;
+        for rule in builtin() {
+            let key = rule.meta().name_key;
+            assert!(
+                MessageKey::ALL.iter().any(|k| k.as_str() == key),
+                "missing message key {key}"
+            );
+        }
     }
 
     // FR-008: builtin ids are unique, so selection by id is unambiguous.

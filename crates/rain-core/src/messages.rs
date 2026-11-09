@@ -71,6 +71,8 @@ pub enum MessageKey {
     TableHeaderSize,
     TableTotal,
     TableSkipped,
+    RuleHomebrewCache,
+    RuleXcodeDerivedData,
 }
 
 impl MessageKey {
@@ -84,6 +86,8 @@ impl MessageKey {
         MessageKey::TableHeaderSize,
         MessageKey::TableTotal,
         MessageKey::TableSkipped,
+        MessageKey::RuleHomebrewCache,
+        MessageKey::RuleXcodeDerivedData,
     ];
 
     /// Key as written in the locale file.
@@ -98,6 +102,8 @@ impl MessageKey {
             MessageKey::TableHeaderSize => "table.header.size",
             MessageKey::TableTotal => "table.total",
             MessageKey::TableSkipped => "table.skipped",
+            MessageKey::RuleHomebrewCache => "rule.macos.homebrew.cache",
+            MessageKey::RuleXcodeDerivedData => "rule.macos.xcode.derived-data",
         }
     }
 }
