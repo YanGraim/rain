@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rain_platform::{Platform, PlatformError, Root};
 
-use crate::fs::Fs;
+use crate::fs::{Fs, Metadata};
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -158,6 +158,15 @@ impl ProtectList {
         self.patterns
             .iter()
             .any(|p| p.literal.starts_with(canonical) || p.normalized.starts_with(&normalized))
+    }
+
+    /// Name check plus identity check of `canonical` alone, using metadata
+    /// the caller already read. Only sound when every ancestor was already
+    /// cleared (the walker clears the root with [`Self::is_protected_on`]
+    /// and each directory before descending), so it avoids re-reading the
+    /// whole ancestor chain for every entry.
+    pub fn is_protected_entry(&self, canonical: &Path, meta: &Metadata) -> bool {
+        self.is_protected(canonical) || self.identities.contains(&(meta.dev, meta.ino))
     }
 
     /// Name check plus identity check: `canonical` or any ancestor sharing
@@ -841,5 +850,22 @@ mod list_tests {
         fs.fail_with("/Users/Shared/Other", io::ErrorKind::PermissionDenied);
         let list = list().with_identities(&fs);
         assert!(list.is_protected_on(&fs, Path::new("/Users/Shared/Other/f")));
+    }
+
+    // FR-007: the walker checks each entry with the metadata it already has,
+    // since its ancestors were checked on the way down.
+    #[test]
+    fn entry_check_uses_name_and_given_identity() {
+        let fs = aliased_fs();
+        let list = list().with_identities(&fs);
+        let alias = Path::new("/Users/Shared/Alias");
+        let other = Path::new("/Users/Shared/Other");
+        let meta = |ino| match fs.symlink_metadata(if ino == 50 { alias } else { other }) {
+            Ok(m) => m,
+            Err(e) => panic!("{e}"),
+        };
+        assert!(list.is_protected_entry(alias, &meta(50)));
+        assert!(!list.is_protected_entry(other, &meta(60)));
+        assert!(list.is_protected_entry(&p("~/.ssh"), &meta(60)));
     }
 }
