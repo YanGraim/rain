@@ -12,5 +12,6 @@
     "other": "{count} items skipped"
   },
   "rule.macos.homebrew.cache": "Homebrew cache",
-  "rule.macos.xcode.derived-data": "Xcode DerivedData"
+  "rule.macos.xcode.derived-data": "Xcode DerivedData",
+  "rule.dev.node-modules": "Old node_modules"
 }

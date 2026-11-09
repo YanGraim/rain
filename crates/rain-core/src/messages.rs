@@ -73,6 +73,7 @@ pub enum MessageKey {
     TableSkipped,
     RuleHomebrewCache,
     RuleXcodeDerivedData,
+    RuleDevNodeModules,
 }
 
 impl MessageKey {
@@ -88,6 +89,7 @@ impl MessageKey {
         MessageKey::TableSkipped,
         MessageKey::RuleHomebrewCache,
         MessageKey::RuleXcodeDerivedData,
+        MessageKey::RuleDevNodeModules,
     ];
 
     /// Key as written in the locale file.
@@ -104,6 +106,7 @@ impl MessageKey {
             MessageKey::TableSkipped => "table.skipped",
             MessageKey::RuleHomebrewCache => "rule.macos.homebrew.cache",
             MessageKey::RuleXcodeDerivedData => "rule.macos.xcode.derived-data",
+            MessageKey::RuleDevNodeModules => "rule.dev.node-modules",
         }
     }
 }

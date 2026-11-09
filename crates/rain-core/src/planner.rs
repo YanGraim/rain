@@ -11,7 +11,7 @@ use rain_platform::Root;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Canonical platform roots, resolved by the caller (the planner never
 /// talks to `Platform`).
@@ -61,7 +61,7 @@ pub fn scan(
         .with_cancel(cancel);
     let mut skipped = BTreeSet::new();
 
-    let found = discover(rules, ctx, &mut walker, &mut skipped)?;
+    let found = discover(rules, ctx, &mut walker, &mut skipped, cancel)?;
     let accepted = accept(found, ctx.protect, &mut skipped);
 
     let mut order: Vec<(RuleId, &PathBuf, usize)> = accepted
@@ -100,6 +100,7 @@ fn discover(
     ctx: &ScanContext,
     walker: &mut Walker,
     skipped: &mut BTreeSet<Skipped>,
+    cancel: &AtomicBool,
 ) -> Result<BTreeMap<PathBuf, usize>, ScanError> {
     let mut found: BTreeMap<PathBuf, usize> = BTreeMap::new();
     for (idx, rule) in rules.iter().enumerate() {
@@ -114,9 +115,20 @@ fn discover(
                 }
             };
             let d = walker.discover(&root, &mut |path, meta, depth| {
-                files.visit(&EntryInfo { path, meta }, depth, &ctx.rule_ctx, ctx.fs)
+                files.visit(
+                    &EntryInfo {
+                        path,
+                        meta,
+                        protect: ctx.protect,
+                        cancel,
+                    },
+                    depth,
+                    &ctx.rule_ctx,
+                    ctx.fs,
+                )
             });
-            if d.cancelled {
+            // FR-011: a rule may stop on the flag after the walker last looked.
+            if d.cancelled || cancel.load(Ordering::SeqCst) {
                 return Err(ScanError::Cancelled);
             }
             skipped.extend(d.skipped.into_iter().filter(|s| {
@@ -257,7 +269,6 @@ mod tests {
     use rain_platform::{Os, Platform, PlatformError, Root};
     use std::io;
     use std::path::Path;
-    use std::sync::atomic::Ordering;
     use std::time::SystemTime;
 
     const HOME: &str = "/Users/Tester";
@@ -871,6 +882,43 @@ mod tests {
             flag: &flag,
         };
         let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        assert_eq!(run_on(&fs, &[&caches], &flag), Err(ScanError::Cancelled));
+    }
+
+    /// Trips the cancel flag on the root's children and gives up on them,
+    /// as a rule with its own reads does on Ctrl+C.
+    struct CancelsInVisit(TestRule);
+
+    impl Rule for CancelsInVisit {
+        fn meta(&self) -> &RuleMeta {
+            &self.0.meta
+        }
+        fn kind(&self) -> RuleKind<'_> {
+            RuleKind::Files(self)
+        }
+    }
+
+    impl FileRule for CancelsInVisit {
+        fn roots(&self, ctx: &RuleContext) -> Vec<RootedPath> {
+            self.0.roots(ctx)
+        }
+        fn visit(&self, entry: &EntryInfo, depth: usize, ctx: &RuleContext, fs: &dyn Fs) -> Visit {
+            if depth > 0 {
+                entry.cancel.store(true, Ordering::SeqCst);
+                return Visit::Skip;
+            }
+            self.0.visit(entry, depth, ctx, fs)
+        }
+    }
+
+    // FR-011: a rule that stops on the flag after the walker's last check
+    // (nothing left to list, no candidate) still cancels the scan.
+    #[test]
+    fn cancel_seen_by_rule_is_error() {
+        let mut fs = base();
+        fs.insert(c("x"), file(240, 8));
+        let caches = CancelsInVisit(rule("macos.user.caches", under(Root::Caches, "")));
+        let flag = AtomicBool::new(false);
         assert_eq!(run_on(&fs, &[&caches], &flag), Err(ScanError::Cancelled));
     }
 
