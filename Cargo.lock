@@ -288,6 +288,7 @@ dependencies = [
 name = "rain-platform"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
 ]
 
