@@ -5,9 +5,15 @@ use crate::protect::ProtectList;
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Size of one `st_blocks` unit, regardless of the filesystem block size.
 const BLOCK_SIZE: u64 = 512;
+
+/// Directories listed per parallel batch. Bounds how many listings are held
+/// in memory at once; merge order is unchanged, so results stay
+/// deterministic.
+const LEVEL_BATCH: usize = 256;
 
 /// Why an entry was left out of the totals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,6 +54,9 @@ pub struct Measure {
     pub file_count: u64,
     /// Entries not counted nor descended, sorted by path.
     pub skipped: Vec<Skipped>,
+    /// FR-011: the walk stopped early; totals are partial and must never be
+    /// shown as final.
+    pub cancelled: bool,
 }
 
 /// Sequential walker. Keeps the set of seen `(dev, ino)` pairs across calls,
@@ -56,6 +65,8 @@ pub struct Walker<'a> {
     fs: &'a dyn Fs,
     protect: &'a ProtectList,
     seen: HashSet<(u64, u64)>,
+    threads: usize,
+    cancel: Option<&'a AtomicBool>,
 }
 
 impl<'a> Walker<'a> {
@@ -66,7 +77,22 @@ impl<'a> Walker<'a> {
             fs,
             protect,
             seen: HashSet::new(),
+            threads: 1,
+            cancel: None,
         }
+    }
+
+    /// Number of worker threads (at least 1).
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads.max(1);
+        self
+    }
+
+    /// FR-011: flag checked for every entry; once set the walk stops and the
+    /// result is marked [`Measure::cancelled`].
+    pub fn with_cancel(mut self, cancel: &'a AtomicBool) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     /// Measures `root` and everything below it. Never fails: whatever cannot
@@ -77,6 +103,10 @@ impl<'a> Walker<'a> {
     /// that is or goes through a symlink is skipped as [`SkipReason::Symlink`].
     pub fn measure(&mut self, root: &Path) -> Measure {
         let mut out = Measure::default();
+        if self.is_cancelled() {
+            out.cancelled = true;
+            return out;
+        }
         match self.open_root(root) {
             Ok(meta) => self.walk(root, meta, &mut out),
             Err(reason) => out.skip(root, reason),
@@ -111,38 +141,141 @@ impl<'a> Walker<'a> {
         Ok(meta)
     }
 
+    /// Level-synchronous walk: each level's directories are read in
+    /// parallel (the slow I/O), then merged on this thread in a fixed order.
+    /// Every decision with shared state (directory cycles, which link of a
+    /// hardlinked inode counts, FR-003/FR-010) happens only in the merge, so
+    /// the result never depends on thread scheduling or thread count.
     fn walk(&mut self, root: &Path, root_meta: Metadata, out: &mut Measure) {
         // Directories are tracked per root, whatever their nlink, so a
         // hard-linked directory cycle ends; nlink cannot be trusted for that.
         let mut dirs = HashSet::new();
-        // Explicit stack: deep trees must not overflow the call stack.
-        let mut pending = vec![(root.to_path_buf(), root_meta)];
-        while let Some((path, meta)) = pending.pop() {
-            if meta.is_dir {
-                if !dirs.insert((meta.dev, meta.ino)) {
-                    continue;
-                }
-                let children = match self.fs.read_dir(&path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        out.skip(&path, SkipReason::from(&e));
-                        continue;
-                    }
-                };
-                for child in children {
-                    match self.admit(&child.path, root_meta.dev) {
-                        Ok(m) => pending.push((child.path, m)),
-                        Err(reason) => out.skip(&child.path, reason),
-                    }
-                }
-            } else {
-                if meta.nlink > 1 && !self.seen.insert((meta.dev, meta.ino)) {
-                    continue;
-                }
-                out.file_count = out.file_count.saturating_add(1);
+        let mut level = Vec::new();
+        self.accept(root.to_path_buf(), root_meta, &mut dirs, &mut level, out);
+        while !level.is_empty() {
+            if self.is_cancelled() {
+                out.cancelled = true;
+                return;
             }
-            out.add_blocks(meta.blocks);
+            let mut next = Vec::new();
+            for batch in level.chunks(LEVEL_BATCH) {
+                let listed = self.read_level(batch, root_meta.dev);
+                for (dir, listing) in batch.iter().zip(listed) {
+                    match listing {
+                        Listing::Cancelled => {
+                            out.cancelled = true;
+                            return;
+                        }
+                        Listing::Failed(reason) => out.skip(dir, reason),
+                        Listing::Children(children) => {
+                            for (path, admitted) in children {
+                                match admitted {
+                                    Ok(meta) => self.accept(path, meta, &mut dirs, &mut next, out),
+                                    Err(reason) => out.skip(&path, reason),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            level = next;
         }
+    }
+
+    /// Counts an admitted entry and queues it for descent if it is a
+    /// directory not seen yet in this root.
+    fn accept(
+        &mut self,
+        path: PathBuf,
+        meta: Metadata,
+        dirs: &mut HashSet<(u64, u64)>,
+        next: &mut Vec<PathBuf>,
+        out: &mut Measure,
+    ) {
+        if meta.is_dir {
+            if !dirs.insert((meta.dev, meta.ino)) {
+                return;
+            }
+            next.push(path);
+        } else {
+            if meta.nlink > 1 && !self.seen.insert((meta.dev, meta.ino)) {
+                return;
+            }
+            out.file_count = out.file_count.saturating_add(1);
+        }
+        out.add_blocks(meta.blocks);
+    }
+
+    /// Lists and admits the children of every directory in `level`, using up
+    /// to `threads` workers. Results come back in `level` order.
+    fn read_level(&self, level: &[PathBuf], root_dev: u64) -> Vec<Listing> {
+        let workers = self.threads.min(level.len());
+        if workers <= 1 {
+            return level.iter().map(|d| self.list(d, root_dev)).collect();
+        }
+        let next = AtomicUsize::new(0);
+        let mut slots: Vec<Option<Listing>> = Vec::new();
+        slots.resize_with(level.len(), || None);
+        let done: Vec<Vec<(usize, Listing)>> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut mine = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(dir) = level.get(i) else { break };
+                            mine.push((i, self.list(dir, root_dev)));
+                        }
+                        mine
+                    })
+                })
+                .collect();
+            // A worker panic is a bug: re-raise it on this thread rather
+            // than reporting a partial result as cancelled or complete.
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        });
+        for (i, listing) in done.into_iter().flatten() {
+            if let Some(slot) = slots.get_mut(i) {
+                *slot = Some(listing);
+            }
+        }
+        // Every index was claimed by a worker that finished, so no slot is
+        // empty. Should one ever be, it stays aligned with its directory and
+        // is reported as skipped: never dropped, never "cancelled".
+        slots
+            .into_iter()
+            .map(|l| l.unwrap_or(Listing::Failed(SkipReason::Io(io::ErrorKind::Other))))
+            .collect()
+    }
+
+    /// Reads one directory and admits each child, checking the cancel flag
+    /// before every entry (FR-011: a huge directory must not delay the stop).
+    fn list(&self, dir: &Path, root_dev: u64) -> Listing {
+        if self.is_cancelled() {
+            return Listing::Cancelled;
+        }
+        let mut entries = match self.fs.read_dir(dir) {
+            Ok(c) => c,
+            Err(e) => return Listing::Failed(SkipReason::from(&e)),
+        };
+        // read_dir order is filesystem-defined; sort for a stable merge.
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut children = Vec::with_capacity(entries.len());
+        for child in entries {
+            if self.is_cancelled() {
+                return Listing::Cancelled;
+            }
+            let admitted = self.admit(&child.path, root_dev);
+            children.push((child.path, admitted));
+        }
+        Listing::Children(children)
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.is_some_and(|c| c.load(Ordering::Relaxed))
     }
 
     /// Reads a child once and decides whether it may be counted or descended.
@@ -166,6 +299,13 @@ impl<'a> Walker<'a> {
         }
         Ok(meta)
     }
+}
+
+/// Outcome of reading one directory on a worker thread.
+enum Listing {
+    Children(Vec<(PathBuf, Result<Metadata, SkipReason>)>),
+    Failed(SkipReason),
+    Cancelled,
 }
 
 impl Measure {
@@ -575,5 +715,259 @@ mod tests {
         let mut w = Walker::new(&fs, &list);
         assert_eq!(sums(&w.measure(&at(""))), (32 * 512, 1));
         assert_eq!(sums(&w.measure(&at("a"))), (16 * 512, 0));
+    }
+
+    /// Wraps a `FakeFs` and makes every metadata read slow.
+    struct SlowFs(FakeFs, std::time::Duration);
+
+    impl Fs for SlowFs {
+        fn symlink_metadata(&self, p: &Path) -> io::Result<Metadata> {
+            std::thread::sleep(self.1);
+            self.0.symlink_metadata(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<crate::fs::DirEntryInfo>> {
+            self.0.read_dir(p)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.0.canonicalize(p)
+        }
+    }
+
+    /// Wide and deep tree with hardlinks spread across far-apart
+    /// directories (so different threads meet the same inode), plus
+    /// symlinks, denied entries, other-volume mounts and dir cycles.
+    fn busy_tree() -> FakeFs {
+        let mut fs = base();
+        let mut ino = 1_000;
+        for d in 0..12 {
+            fs.insert(at(&format!("d{d}")), dir(ino));
+            ino += 1;
+            for s in 0..6 {
+                let sub = format!("d{d}/s{s}");
+                fs.insert(at(&sub), dir(ino));
+                ino += 1;
+                for f in 0..8 {
+                    fs.insert(at(&format!("{sub}/f{f}")), file(ino, (f + 1) * 8));
+                    ino += 1;
+                }
+                // Shared inodes 1..=5, linked from every subdirectory.
+                fs.insert(
+                    at(&format!("{sub}/h{}", (d + s) % 5)),
+                    entry(false, (d + s) % 5 + 1, 72, 16, 8192),
+                );
+            }
+            fs.insert_symlink(at(&format!("d{d}/link")), "/Big");
+            fs.insert(at(&format!("d{d}/denied")), dir(ino))
+                .fail_with(at(&format!("d{d}/denied")), io::ErrorKind::PermissionDenied);
+            ino += 1;
+            let mut mnt = dir(ino);
+            mnt.dev = 9;
+            fs.insert(at(&format!("d{d}/mnt")), mnt);
+            ino += 1;
+        }
+        // Hard-linked directory cycle reachable from two places.
+        fs.insert(at("d0/cyc"), entry(true, 900, 3, 8, 0))
+            .insert(at("d0/cyc/f"), file(901, 8))
+            .insert(at("d0/cyc/odd"), file(902, 8))
+            .fail_with(at("d0/cyc/odd"), io::ErrorKind::InvalidData)
+            .insert(at("d7/cyc"), entry(true, 900, 3, 8, 0))
+            .insert(at("d7/cyc/f"), file(901, 8))
+            .insert(at("d7/cyc/odd"), file(902, 8))
+            .fail_with(at("d7/cyc/odd"), io::ErrorKind::InvalidData);
+        fs
+    }
+
+    fn measure_roots(
+        fs: &dyn Fs,
+        list: &ProtectList,
+        threads: usize,
+        roots: &[PathBuf],
+    ) -> Vec<Measure> {
+        let mut w = Walker::new(fs, list).with_threads(threads);
+        roots.iter().map(|r| w.measure(r)).collect()
+    }
+
+    // FR-010, FR-003: the parallel walker gives the same totals, the same
+    // hardlink attribution across roots and the same skipped list as the
+    // sequential one, run after run.
+    #[test]
+    fn same_result_parallel_and_sequential() {
+        let fs = busy_tree();
+        let list = protect(&fs);
+        let roots = [at(""), at("d3"), at("d0/cyc")];
+        let seq = measure_roots(&fs, &list, 1, &roots);
+        assert!(seq[0].file_count > 0 && !seq[0].skipped.is_empty());
+        for threads in [2, 3, 8, 16] {
+            for _ in 0..20 {
+                assert_eq!(
+                    measure_roots(&fs, &list, threads, &roots),
+                    seq,
+                    "threads {threads}"
+                );
+            }
+        }
+    }
+
+    // FR-003: an inode linked from many subtrees walked by different threads
+    // is counted exactly once, and in a later root not at all.
+    #[test]
+    fn hardlinks_across_threads_counted_once() {
+        let mut fs = base();
+        for d in 0..32 {
+            fs.insert(at(&format!("d{d}")), dir(10 + d))
+                .insert(at(&format!("d{d}/h")), entry(false, 9, 32, 8, 4096));
+        }
+        fs.insert(at("later"), dir(99))
+            .insert(at("later/h"), entry(false, 9, 33, 8, 4096));
+        let list = protect(&fs);
+        for _ in 0..20 {
+            let mut w = Walker::new(&fs, &list).with_threads(8);
+            assert_eq!(sums(&w.measure(&at(""))).1, 1);
+            assert_eq!(sums(&w.measure(&at("later"))), (0, 0));
+        }
+    }
+
+    // FR-011: cancelling a slow walk stops it within 1 s and marks the
+    // partial result as cancelled.
+    #[test]
+    fn cancel_returns_cancelled_within_1s() {
+        let mut fake = base();
+        for d in 0..40 {
+            fake.insert(at(&format!("d{d}")), dir(10_000 + d));
+            for f in 0..100 {
+                fake.insert(at(&format!("d{d}/f{f}")), file(d * 1_000 + f + 1, 8));
+            }
+        }
+        // 4000 entries * 5 ms is far beyond 1 s even with 8 threads.
+        let fs = SlowFs(fake, std::time::Duration::from_millis(5));
+        let list = protect(&fs.0);
+        let cancel = AtomicBool::new(false);
+        let (m, elapsed) = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            let start = std::time::Instant::now();
+            let m = Walker::new(&fs, &list)
+                .with_threads(8)
+                .with_cancel(&cancel)
+                .measure(&at(""));
+            (m, start.elapsed())
+        });
+        assert!(m.cancelled);
+        assert!(m.file_count < 4_000);
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+    }
+
+    // FR-011: a flag already set stops before reading anything below root.
+    #[test]
+    fn cancel_before_start_reads_nothing() {
+        let mut fs = base();
+        fs.insert(at("f"), file(5, 8));
+        let list = protect(&fs);
+        let cancel = AtomicBool::new(true);
+        let m = Walker::new(&fs, &list)
+            .with_cancel(&cancel)
+            .measure(&at(""));
+        assert!(m.cancelled);
+        assert_eq!(sums(&m), (0, 0));
+    }
+
+    // FR-011: an uncancelled walk is never marked cancelled.
+    #[test]
+    fn complete_walk_is_not_cancelled() {
+        let fs = busy_tree();
+        let list = protect(&fs);
+        let cancel = AtomicBool::new(false);
+        let m = Walker::new(&fs, &list)
+            .with_threads(4)
+            .with_cancel(&cancel)
+            .measure(&at(""));
+        assert!(!m.cancelled);
+    }
+
+    /// Panics when asked about one path, to test worker panic handling.
+    struct PanicFs(FakeFs, PathBuf);
+
+    impl Fs for PanicFs {
+        fn symlink_metadata(&self, p: &Path) -> io::Result<Metadata> {
+            if p == self.1 {
+                panic!("boom");
+            }
+            self.0.symlink_metadata(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<crate::fs::DirEntryInfo>> {
+            self.0.read_dir(p)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.0.canonicalize(p)
+        }
+    }
+
+    // FR-011: a worker panic is a bug and propagates; it is never reported
+    // as a cancelled (or complete) partial result.
+    #[test]
+    fn worker_panic_propagates_not_cancelled() {
+        let mut fake = base();
+        for d in 0..8 {
+            fake.insert(at(&format!("d{d}")), dir(10 + d))
+                .insert(at(&format!("d{d}/f")), file(100 + d, 8));
+        }
+        let fs = PanicFs(fake, at("d5/f"));
+        let list = protect(&fs.0);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Walker::new(&fs, &list).with_threads(4).measure(&at(""))
+        }));
+        match r {
+            Err(_) => {}
+            Ok(m) => panic!("expected panic, got {m:?}"),
+        }
+    }
+
+    // FR-011: cancelling inside one huge directory stops within 1 s.
+    #[test]
+    fn cancel_inside_single_huge_dir_within_1s() {
+        let mut fake = base();
+        fake.insert(at("big"), dir(50));
+        for f in 0..5_000 {
+            fake.insert(at(&format!("big/f{f:05}")), file(1_000 + f, 8));
+        }
+        let fs = SlowFs(fake, std::time::Duration::from_millis(2));
+        let list = protect(&fs.0);
+        let cancel = AtomicBool::new(false);
+        let (m, elapsed) = std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            let start = std::time::Instant::now();
+            let m = Walker::new(&fs, &list)
+                .with_threads(4)
+                .with_cancel(&cancel)
+                .measure(&at("big"));
+            (m, start.elapsed())
+        });
+        assert!(m.cancelled);
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+    }
+
+    // FR-010: a level wider than one batch still merges in the same order.
+    #[test]
+    fn level_wider_than_batch_matches_sequential() {
+        let mut fs = base();
+        for d in 0..(LEVEL_BATCH as u64 * 2 + 7) {
+            fs.insert(at(&format!("d{d:04}")), dir(10_000 + d))
+                .insert(at(&format!("d{d:04}/h")), entry(false, 9, 500, 8, 4096))
+                .insert_symlink(at(&format!("d{d:04}/l")), "/x");
+        }
+        let list = protect(&fs);
+        let seq = Walker::new(&fs, &list).measure(&at(""));
+        for _ in 0..5 {
+            assert_eq!(
+                Walker::new(&fs, &list).with_threads(8).measure(&at("")),
+                seq
+            );
+        }
+        assert_eq!(seq.file_count, 1);
     }
 }

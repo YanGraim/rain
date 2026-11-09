@@ -69,6 +69,9 @@ fn real_fs_skips_symlink_and_denied_dir_and_counts_file() {
         .unwrap()
         .with_identities(&StdFs);
     let m = Walker::new(&StdFs, &list).measure(&root);
+    // FR-010: the parallel walker sees the same real sandbox identically.
+    let par = Walker::new(&StdFs, &list).with_threads(4).measure(&root);
+    assert_eq!(par, m);
 
     let kept_blocks = StdFs.symlink_metadata(&root.join("kept")).unwrap().blocks;
     let root_blocks = StdFs.symlink_metadata(&root).unwrap().blocks;
