@@ -5,7 +5,7 @@
 use crate::model::RuleId;
 use crate::rule::Rule;
 
-/// Built-in rules, most specific first. Concrete rules are added from T10 on.
+/// Built-in rules, most specific first. Concrete rules are added in later changes.
 static BUILTIN: &[&dyn Rule] = &[];
 
 pub fn builtin() -> &'static [&'static dyn Rule] {

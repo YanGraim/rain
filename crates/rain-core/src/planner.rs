@@ -120,7 +120,7 @@ fn discover(
                 return Err(ScanError::Cancelled);
             }
             skipped.extend(d.skipped.into_iter().filter(|s| {
-                // Plan T09 (3): a missing rule root just means 0 items.
+                // FR-009: a missing rule root just means 0 items.
                 !(silent_if_missing && s.path == root && s.reason == SkipReason::NotFound)
             }));
             candidates.extend(d.candidates);
@@ -617,7 +617,7 @@ mod tests {
         assert_eq!(report.total_bytes, 12 * 512);
     }
 
-    // T11 / plan T09 (3): a rule root that does not exist is not an error and
+    // FR-009: a rule root that does not exist is not an error and
     // not a skip; the rule just shows 0 items.
     #[test]
     fn missing_rule_root_is_silent() {
@@ -737,7 +737,7 @@ mod tests {
         fs
     }
 
-    // FR-007 (seguranca veto): an absolute `rel` would replace the base in
+    // FR-007: an absolute `rel` would replace the base in
     // `join`; it is refused explicitly, never walked nor silent.
     #[test]
     fn under_absolute_rel_is_rejected() {
@@ -748,7 +748,7 @@ mod tests {
         assert_eq!(reasons(&report), vec![SkipReason::InvalidRoot]);
     }
 
-    // FR-007 (seguranca veto): `..` or `.` in `rel` is refused explicitly.
+    // FR-007: `..` or `.` in `rel` is refused explicitly.
     #[test]
     fn under_dotdot_rel_is_rejected() {
         let fs = with_outside();
@@ -760,7 +760,7 @@ mod tests {
         }
     }
 
-    // FR-004/FR-007 (seguranca veto): a `rel` that is a symlink is not
+    // FR-004/FR-007: a `rel` that is a symlink is not
     // followed and is reported, not silent.
     #[test]
     fn under_symlinked_rel_is_rejected() {
