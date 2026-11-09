@@ -160,7 +160,7 @@ impl<'a> Walker<'a> {
             let mut next = Vec::new();
             for batch in level.chunks(LEVEL_BATCH) {
                 let listed = self.read_level(batch, root_meta.dev);
-                for (dir, listing) in batch.iter().zip(listed) {
+                for ((dir, dir_blocks), listing) in batch.iter().zip(listed) {
                     match listing {
                         Listing::Cancelled => {
                             out.cancelled = true;
@@ -168,6 +168,9 @@ impl<'a> Walker<'a> {
                         }
                         Listing::Failed(reason) => out.skip(dir, reason),
                         Listing::Children(children) => {
+                            // FR-004: a directory's own blocks count only
+                            // once its listing succeeded, like its contents.
+                            out.add_blocks(*dir_blocks);
                             for (path, admitted) in children {
                                 match admitted {
                                     Ok(meta) => self.accept(path, meta, &mut dirs, &mut next, out),
@@ -189,29 +192,30 @@ impl<'a> Walker<'a> {
         path: PathBuf,
         meta: Metadata,
         dirs: &mut HashSet<(u64, u64)>,
-        next: &mut Vec<PathBuf>,
+        next: &mut Vec<(PathBuf, u64)>,
         out: &mut Measure,
     ) {
         if meta.is_dir {
             if !dirs.insert((meta.dev, meta.ino)) {
                 return;
             }
-            next.push(path);
+            // Blocks added in the merge, only if the listing succeeds.
+            next.push((path, meta.blocks));
         } else {
             if meta.nlink > 1 && !self.seen.insert((meta.dev, meta.ino)) {
                 return;
             }
             out.file_count = out.file_count.saturating_add(1);
+            out.add_blocks(meta.blocks);
         }
-        out.add_blocks(meta.blocks);
     }
 
     /// Lists and admits the children of every directory in `level`, using up
     /// to `threads` workers. Results come back in `level` order.
-    fn read_level(&self, level: &[PathBuf], root_dev: u64) -> Vec<Listing> {
+    fn read_level(&self, level: &[(PathBuf, u64)], root_dev: u64) -> Vec<Listing> {
         let workers = self.threads.min(level.len());
         if workers <= 1 {
-            return level.iter().map(|d| self.list(d, root_dev)).collect();
+            return level.iter().map(|(d, _)| self.list(d, root_dev)).collect();
         }
         let next = AtomicUsize::new(0);
         let mut slots: Vec<Option<Listing>> = Vec::new();
@@ -223,7 +227,7 @@ impl<'a> Walker<'a> {
                         let mut mine = Vec::new();
                         loop {
                             let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(dir) = level.get(i) else { break };
+                            let Some((dir, _)) = level.get(i) else { break };
                             mine.push((i, self.list(dir, root_dev)));
                         }
                         mine
@@ -969,5 +973,45 @@ mod tests {
             );
         }
         assert_eq!(seq.file_count, 1);
+    }
+
+    /// Metadata readable, listing denied: like a mode-000 dir on Linux.
+    struct DenyListFs(FakeFs, PathBuf);
+
+    impl Fs for DenyListFs {
+        fn symlink_metadata(&self, p: &Path) -> io::Result<Metadata> {
+            self.0.symlink_metadata(p)
+        }
+        fn read_dir(&self, p: &Path) -> io::Result<Vec<crate::fs::DirEntryInfo>> {
+            if p == self.1 {
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            self.0.read_dir(p)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.0.canonicalize(p)
+        }
+    }
+
+    // FR-004: a directory whose listing is denied is skipped whole; its own
+    // blocks are not counted either, sequential or parallel.
+    #[test]
+    fn unlistable_dir_blocks_not_counted() {
+        let mut fake = base();
+        fake.insert(at("denied"), entry(true, 5, 2, 8, 0))
+            .insert(at("denied/x"), file(6, 8))
+            .insert(at("kept"), file(4, 8));
+        let fs = DenyListFs(fake, at("denied"));
+        let list = protect(&fs.0);
+        for threads in [1, 4] {
+            let m = Walker::new(&fs, &list)
+                .with_threads(threads)
+                .measure(&at(""));
+            assert_eq!(sums(&m), (8 * 512, 1), "threads {threads}");
+            assert_eq!(
+                m.skipped,
+                vec![skip("denied", SkipReason::PermissionDenied)]
+            );
+        }
     }
 }
