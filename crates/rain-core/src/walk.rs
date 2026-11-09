@@ -2,7 +2,8 @@
 
 use crate::fs::{Fs, Metadata};
 use crate::protect::ProtectList;
-use std::collections::HashSet;
+use crate::rule::Visit;
+use std::collections::{BTreeSet, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -15,6 +16,9 @@ const BLOCK_SIZE: u64 = 512;
 /// deterministic.
 const LEVEL_BATCH: usize = 256;
 
+/// No exclusions: what [`Walker::measure`] and discovery pass down.
+static NOTHING_EXCLUDED: BTreeSet<PathBuf> = BTreeSet::new();
+
 /// Why an entry was left out of the totals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkipReason {
@@ -24,6 +28,9 @@ pub enum SkipReason {
     Symlink,
     OtherVolume,
     NotFound,
+    /// A rule root that is not a plain relative path below its base
+    /// (absolute, `.`, `..`): refused before any read.
+    InvalidRoot,
     /// Any other read error, kept with its kind so it is never silent.
     Io(io::ErrorKind),
 }
@@ -56,6 +63,17 @@ pub struct Measure {
     pub skipped: Vec<Skipped>,
     /// FR-011: the walk stopped early; totals are partial and must never be
     /// shown as final.
+    pub cancelled: bool,
+}
+
+/// Candidates found below one discovery root (FR-002).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Discovery {
+    /// Paths the rule marked [`Visit::Candidate`], in walk order.
+    pub candidates: Vec<PathBuf>,
+    /// Entries not visited nor descended, sorted by path.
+    pub skipped: Vec<Skipped>,
+    /// FR-011: discovery stopped early; candidates are partial.
     pub cancelled: bool,
 }
 
@@ -102,17 +120,127 @@ impl<'a> Walker<'a> {
     /// `root` must be canonical (as returned by `Platform::resolve`); a root
     /// that is or goes through a symlink is skipped as [`SkipReason::Symlink`].
     pub fn measure(&mut self, root: &Path) -> Measure {
+        self.measure_excluding(root, &NOTHING_EXCLUDED)
+    }
+
+    /// Like [`Self::measure`], but every path in `excluded` (and what lies
+    /// below it) is ignored without being reported as skipped: it belongs to
+    /// another item and is counted there (ADR 0005).
+    pub fn measure_excluding(&mut self, root: &Path, excluded: &BTreeSet<PathBuf>) -> Measure {
         let mut out = Measure::default();
         if self.is_cancelled() {
             out.cancelled = true;
             return out;
         }
         match self.open_root(root) {
-            Ok(meta) => self.walk(root, meta, &mut out),
+            Ok(meta) => self.walk(root, meta, excluded, &mut out),
             Err(reason) => out.skip(root, reason),
         }
         out.skipped.sort();
         out
+    }
+
+    /// FR-002: walks `root` with the same filters as [`Self::measure`]
+    /// (symlinks, other volumes, protection, unreadable entries), asking
+    /// `visit` about every admitted entry, the root included at depth 0.
+    /// A candidate is recorded and not descended; nothing is measured and
+    /// the hardlink set is left untouched.
+    pub fn discover(
+        &mut self,
+        root: &Path,
+        visit: &mut dyn FnMut(&Path, &Metadata, usize) -> Visit,
+    ) -> Discovery {
+        let mut out = Discovery::default();
+        if self.is_cancelled() {
+            out.cancelled = true;
+            return out;
+        }
+        match self.open_root(root) {
+            Ok(meta) => self.discover_walk(root, meta, visit, &mut out),
+            Err(reason) => out.skipped.push(Skipped {
+                path: root.to_path_buf(),
+                reason,
+            }),
+        }
+        out.skipped.sort();
+        out
+    }
+
+    /// Level-synchronous like [`Self::walk`]: listing in parallel, every
+    /// `visit` call on this thread in a fixed order.
+    fn discover_walk(
+        &mut self,
+        root: &Path,
+        root_meta: Metadata,
+        visit: &mut dyn FnMut(&Path, &Metadata, usize) -> Visit,
+        out: &mut Discovery,
+    ) {
+        let mut dirs = HashSet::new();
+        let mut level = Vec::new();
+        let mut depth = 0;
+        Self::offer(
+            root.to_path_buf(),
+            root_meta,
+            depth,
+            visit,
+            &mut dirs,
+            &mut level,
+            out,
+        );
+        while !level.is_empty() {
+            if self.is_cancelled() {
+                out.cancelled = true;
+                return;
+            }
+            depth += 1;
+            let mut next = Vec::new();
+            for batch in level.chunks(LEVEL_BATCH) {
+                let listed = self.read_level(batch, root_meta.dev, &NOTHING_EXCLUDED);
+                for ((dir, _), listing) in batch.iter().zip(listed) {
+                    match listing {
+                        Listing::Cancelled => {
+                            out.cancelled = true;
+                            return;
+                        }
+                        Listing::Failed(reason) => out.skipped.push(Skipped {
+                            path: dir.clone(),
+                            reason,
+                        }),
+                        Listing::Children(children) => {
+                            for (path, admitted) in children {
+                                match admitted {
+                                    Ok(meta) => Self::offer(
+                                        path, meta, depth, visit, &mut dirs, &mut next, out,
+                                    ),
+                                    Err(reason) => out.skipped.push(Skipped { path, reason }),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            level = next;
+        }
+    }
+
+    /// Asks the rule about one admitted entry during discovery.
+    fn offer(
+        path: PathBuf,
+        meta: Metadata,
+        depth: usize,
+        visit: &mut dyn FnMut(&Path, &Metadata, usize) -> Visit,
+        dirs: &mut HashSet<(u64, u64)>,
+        next: &mut Vec<(PathBuf, u64)>,
+        out: &mut Discovery,
+    ) {
+        match visit(&path, &meta, depth) {
+            Visit::Candidate => out.candidates.push(path),
+            // A directory cycle ends here, as in the measuring walk.
+            Visit::Descend if meta.is_dir && dirs.insert((meta.dev, meta.ino)) => {
+                next.push((path, meta.blocks));
+            }
+            Visit::Descend | Visit::Skip => {}
+        }
     }
 
     /// Validates the root and reads its metadata exactly once. That single
@@ -146,7 +274,13 @@ impl<'a> Walker<'a> {
     /// Every decision with shared state (directory cycles, which link of a
     /// hardlinked inode counts, FR-003/FR-010) happens only in the merge, so
     /// the result never depends on thread scheduling or thread count.
-    fn walk(&mut self, root: &Path, root_meta: Metadata, out: &mut Measure) {
+    fn walk(
+        &mut self,
+        root: &Path,
+        root_meta: Metadata,
+        excluded: &BTreeSet<PathBuf>,
+        out: &mut Measure,
+    ) {
         // Directories are tracked per root, whatever their nlink, so a
         // hard-linked directory cycle ends; nlink cannot be trusted for that.
         let mut dirs = HashSet::new();
@@ -159,7 +293,7 @@ impl<'a> Walker<'a> {
             }
             let mut next = Vec::new();
             for batch in level.chunks(LEVEL_BATCH) {
-                let listed = self.read_level(batch, root_meta.dev);
+                let listed = self.read_level(batch, root_meta.dev, excluded);
                 for ((dir, dir_blocks), listing) in batch.iter().zip(listed) {
                     match listing {
                         Listing::Cancelled => {
@@ -212,10 +346,18 @@ impl<'a> Walker<'a> {
 
     /// Lists and admits the children of every directory in `level`, using up
     /// to `threads` workers. Results come back in `level` order.
-    fn read_level(&self, level: &[(PathBuf, u64)], root_dev: u64) -> Vec<Listing> {
+    fn read_level(
+        &self,
+        level: &[(PathBuf, u64)],
+        root_dev: u64,
+        excluded: &BTreeSet<PathBuf>,
+    ) -> Vec<Listing> {
         let workers = self.threads.min(level.len());
         if workers <= 1 {
-            return level.iter().map(|(d, _)| self.list(d, root_dev)).collect();
+            return level
+                .iter()
+                .map(|(d, _)| self.list(d, root_dev, excluded))
+                .collect();
         }
         let next = AtomicUsize::new(0);
         let mut slots: Vec<Option<Listing>> = Vec::new();
@@ -228,7 +370,7 @@ impl<'a> Walker<'a> {
                         loop {
                             let i = next.fetch_add(1, Ordering::Relaxed);
                             let Some((dir, _)) = level.get(i) else { break };
-                            mine.push((i, self.list(dir, root_dev)));
+                            mine.push((i, self.list(dir, root_dev, excluded)));
                         }
                         mine
                     })
@@ -257,7 +399,7 @@ impl<'a> Walker<'a> {
 
     /// Reads one directory and admits each child, checking the cancel flag
     /// before every entry (FR-011: a huge directory must not delay the stop).
-    fn list(&self, dir: &Path, root_dev: u64) -> Listing {
+    fn list(&self, dir: &Path, root_dev: u64, excluded: &BTreeSet<PathBuf>) -> Listing {
         if self.is_cancelled() {
             return Listing::Cancelled;
         }
@@ -271,6 +413,10 @@ impl<'a> Walker<'a> {
         for child in entries {
             if self.is_cancelled() {
                 return Listing::Cancelled;
+            }
+            // Counted by another item; not read, not reported (ADR 0005).
+            if excluded.contains(&child.path) {
+                continue;
             }
             let admitted = self.admit(&child.path, root_dev);
             children.push((child.path, admitted));
@@ -1013,5 +1159,93 @@ mod tests {
                 vec![skip("denied", SkipReason::PermissionDenied)]
             );
         }
+    }
+
+    fn excluding(rels: &[&str]) -> BTreeSet<PathBuf> {
+        rels.iter().map(|r| at(r)).collect()
+    }
+
+    // FR-003 (ADR 0005): an excluded subtree belongs to another item, so it
+    // is neither counted nor reported as skipped.
+    #[test]
+    fn measure_excluding_ignores_subtree_silently() {
+        let mut fs = base();
+        fs.insert(at("a"), dir(1))
+            .insert(at("a/inner"), dir(2))
+            .insert(at("a/inner/x"), file(3, 8))
+            .insert(at("a/rest"), file(4, 16));
+        let list = protect(&fs);
+        for threads in [1, 4] {
+            let m = Walker::new(&fs, &list)
+                .with_threads(threads)
+                .measure_excluding(&at("a"), &excluding(&["a/inner"]));
+            assert_eq!(sums(&m), (16 * 512, 1), "threads {threads}");
+            assert!(m.skipped.is_empty());
+        }
+    }
+
+    // FR-002: discovery stops at a candidate, descends on Descend, drops on
+    // Skip, passes the depth (0 = root) and measures nothing.
+    #[test]
+    fn discover_reports_candidates_without_descending_them() {
+        let mut fs = base();
+        fs.insert(at("keep"), dir(1))
+            .insert(at("keep/deep"), dir(2))
+            .insert(at("walk"), dir(3))
+            .insert(at("walk/hit"), file(4, 8))
+            .insert(at("walk/miss"), file(5, 8))
+            .insert(at("drop"), dir(6))
+            .insert(at("drop/hit"), file(7, 8))
+            .insert_symlink(at("link"), "/etc");
+        let list = protect(&fs);
+        let mut visited = Vec::new();
+        let d = Walker::new(&fs, &list)
+            .with_threads(4)
+            .discover(&at(""), &mut |p, _, depth| {
+                visited.push((p.to_path_buf(), depth));
+                match p.file_name().and_then(|n| n.to_str()) {
+                    _ if depth == 0 => Visit::Descend,
+                    Some("keep" | "hit") => Visit::Candidate,
+                    Some("walk") => Visit::Descend,
+                    _ => Visit::Skip,
+                }
+            });
+        assert!(!d.cancelled);
+        assert_eq!(d.candidates, vec![at("keep"), at("walk/hit")]);
+        assert_eq!(d.skipped, vec![skip("link", SkipReason::Symlink)]);
+        assert!(!visited.iter().any(|(p, _)| p == &at("keep/deep")));
+        assert!(!visited.iter().any(|(p, _)| p == &at("drop/hit")));
+        assert!(visited.contains(&(at("walk/hit"), 2)));
+    }
+
+    // FR-007: a protected discovery root yields nothing but the skip.
+    #[test]
+    fn discover_protected_root_is_skipped() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.ssh", dir(9))
+            .insert("/Users/Tester/.ssh/id", file(10, 8));
+        let list = protect(&fs);
+        let root = Path::new("/Users/Tester/.ssh");
+        let d = Walker::new(&fs, &list).discover(root, &mut |_, _, _| Visit::Candidate);
+        assert!(d.candidates.is_empty());
+        assert_eq!(
+            d.skipped,
+            vec![Skipped {
+                path: root.to_path_buf(),
+                reason: SkipReason::Protected
+            }]
+        );
+    }
+
+    // FR-011: discovery honours the cancel flag.
+    #[test]
+    fn discover_cancelled_is_flagged() {
+        let fs = base();
+        let list = protect(&fs);
+        let cancel = AtomicBool::new(true);
+        let d = Walker::new(&fs, &list)
+            .with_cancel(&cancel)
+            .discover(&at(""), &mut |_, _, _| Visit::Descend);
+        assert!(d.cancelled);
     }
 }
