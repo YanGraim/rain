@@ -3,7 +3,11 @@
 pub mod clock;
 pub mod fs;
 pub mod messages;
+pub mod model;
+pub mod planner;
 pub mod protect;
+pub mod rule;
+pub mod rules;
 pub mod size;
 pub mod walk;
 
