@@ -15,7 +15,7 @@ mod fake;
 #[cfg(any(test, feature = "testing"))]
 pub use fake::FakePlatform;
 #[cfg(target_os = "macos")]
-pub use macos::MacPlatform;
+pub use macos::{MacPlatform, ProcessEnv, RealProcessEnv};
 
 /// Crate version, shared across the workspace.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
