@@ -13,5 +13,7 @@
   },
   "rule.macos.homebrew.cache": "Cache do Homebrew",
   "rule.macos.xcode.derived-data": "DerivedData do Xcode",
+  "rule.macos.user.logs": "Logs do usuário",
+  "rule.macos.user.caches": "Caches do usuário",
   "rule.dev.node-modules": "node_modules antigos"
 }

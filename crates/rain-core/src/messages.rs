@@ -73,6 +73,8 @@ pub enum MessageKey {
     TableSkipped,
     RuleHomebrewCache,
     RuleXcodeDerivedData,
+    RuleUserLogs,
+    RuleUserCaches,
     RuleDevNodeModules,
 }
 
@@ -89,6 +91,8 @@ impl MessageKey {
         MessageKey::TableSkipped,
         MessageKey::RuleHomebrewCache,
         MessageKey::RuleXcodeDerivedData,
+        MessageKey::RuleUserLogs,
+        MessageKey::RuleUserCaches,
         MessageKey::RuleDevNodeModules,
     ];
 
@@ -106,6 +110,8 @@ impl MessageKey {
             MessageKey::TableSkipped => "table.skipped",
             MessageKey::RuleHomebrewCache => "rule.macos.homebrew.cache",
             MessageKey::RuleXcodeDerivedData => "rule.macos.xcode.derived-data",
+            MessageKey::RuleUserLogs => "rule.macos.user.logs",
+            MessageKey::RuleUserCaches => "rule.macos.user.caches",
             MessageKey::RuleDevNodeModules => "rule.dev.node-modules",
         }
     }

@@ -2,8 +2,10 @@
 //! the same path, the earlier one keeps it (ADR 0005), so more specific
 //! rules come first.
 
+mod children;
 mod macos;
 mod node_modules;
+mod user;
 
 use crate::model::RuleId;
 use crate::rule::Rule;
@@ -12,6 +14,8 @@ use crate::rule::Rule;
 static BUILTIN: &[&dyn Rule] = &[
     &macos::HOMEBREW_CACHE,
     &macos::XCODE_DERIVED_DATA,
+    &user::USER_LOGS,
+    &user::USER_CACHES,
     &node_modules::NODE_MODULES,
 ];
 
@@ -148,5 +152,20 @@ mod tests {
         all.sort_unstable();
         all.dedup();
         assert_eq!(all.len(), n);
+    }
+
+    // FR-002 / ADR 0005: the registry order is homebrew, xcode, logs, caches.
+    #[test]
+    fn builtin_order_is_specific_first() {
+        assert_eq!(
+            ids(builtin()),
+            [
+                "macos.homebrew.cache",
+                "macos.xcode.derived-data",
+                "macos.user.logs",
+                "macos.user.caches",
+                "dev.node-modules",
+            ]
+        );
     }
 }

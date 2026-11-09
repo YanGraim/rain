@@ -1,40 +1,10 @@
-//! macOS rules whose items are the direct children of one fixed folder.
+//! macOS developer-tool rules whose items are the direct children of one
+//! fixed folder.
 
-use crate::fs::Fs;
+use super::children::ChildrenOf;
 use crate::model::{Category, Risk, RuleId};
-use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
+use crate::rule::RuleMeta;
 use rain_platform::{Os, Root};
-
-/// A rule that lists the direct children of `Under(root, rel)` as items.
-/// A missing folder simply yields 0 items (the planner keeps it silent).
-pub struct ChildrenOf {
-    meta: RuleMeta,
-    root: Root,
-    rel: &'static str,
-}
-
-impl Rule for ChildrenOf {
-    fn meta(&self) -> &RuleMeta {
-        &self.meta
-    }
-    fn kind(&self) -> RuleKind<'_> {
-        RuleKind::Files(self)
-    }
-}
-
-impl FileRule for ChildrenOf {
-    fn roots(&self, _: &RuleContext) -> Vec<RootedPath> {
-        vec![RootedPath::Under(self.root, self.rel)]
-    }
-    fn visit(&self, _: &EntryInfo, depth: usize, _: &RuleContext, _: &dyn Fs) -> Visit {
-        // FR-002: the folder itself is never an item, only what it holds.
-        if depth == 0 {
-            Visit::Descend
-        } else {
-            Visit::Candidate
-        }
-    }
-}
 
 /// FR-002: Xcode build products; each project folder is one item.
 pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
@@ -70,6 +40,7 @@ mod tests {
     use crate::model::{ScanReport, SkipReason};
     use crate::planner::{scan, ResolvedRoots, ScanContext};
     use crate::protect::ProtectList;
+    use crate::rule::{Rule, RuleContext};
     use rain_platform::{Platform, PlatformError};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
