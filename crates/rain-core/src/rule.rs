@@ -2,8 +2,10 @@
 
 use crate::fs::{Fs, Metadata};
 use crate::model::{Category, Risk, RuleId};
+use crate::protect::ProtectList;
 use rain_platform::{Os, Root};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
 /// Static description of a rule.
@@ -53,6 +55,12 @@ pub enum Visit {
 pub struct EntryInfo<'a> {
     pub path: &'a Path,
     pub meta: &'a Metadata,
+    /// FR-007: for rules that read beyond the entry (e.g. a project's age),
+    /// so those reads never enter protected folders either.
+    pub protect: &'a ProtectList,
+    /// FR-011: the scan's cancel flag, for rules whose checks read further.
+    /// A rule that stops on it reports nothing; the planner sees the flag.
+    pub cancel: &'a AtomicBool,
 }
 
 /// Inputs every rule sees. Time comes from here, never from a clock.

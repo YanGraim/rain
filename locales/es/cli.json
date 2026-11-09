@@ -12,5 +12,6 @@
     "other": "{count} elementos omitidos"
   },
   "rule.macos.homebrew.cache": "Caché de Homebrew",
-  "rule.macos.xcode.derived-data": "DerivedData de Xcode"
+  "rule.macos.xcode.derived-data": "DerivedData de Xcode",
+  "rule.dev.node-modules": "node_modules antiguos"
 }

@@ -3,12 +3,17 @@
 //! rules come first.
 
 mod macos;
+mod node_modules;
 
 use crate::model::RuleId;
 use crate::rule::Rule;
 
 /// Built-in rules, most specific first.
-static BUILTIN: &[&dyn Rule] = &[&macos::HOMEBREW_CACHE, &macos::XCODE_DERIVED_DATA];
+static BUILTIN: &[&dyn Rule] = &[
+    &macos::HOMEBREW_CACHE,
+    &macos::XCODE_DERIVED_DATA,
+    &node_modules::NODE_MODULES,
+];
 
 pub fn builtin() -> &'static [&'static dyn Rule] {
     BUILTIN
