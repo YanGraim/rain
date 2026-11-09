@@ -10,5 +10,7 @@
   "table.skipped": {
     "one": "{count} elemento omitido",
     "other": "{count} elementos omitidos"
-  }
+  },
+  "rule.macos.homebrew.cache": "Caché de Homebrew",
+  "rule.macos.xcode.derived-data": "DerivedData de Xcode"
 }

@@ -1,0 +1,9 @@
+# Fake home for the Xcode DerivedData and Homebrew cache rules.
+# One file per line: <path relative to home> <size in bytes>.
+Library/Developer/Xcode/DerivedData/App-abc/Build/Products/app.o 8192
+Library/Developer/Xcode/DerivedData/App-abc/info.plist 4096
+Library/Developer/Xcode/DerivedData/Lib-def/Index/store 16384
+Library/Caches/Homebrew/downloads/abc--wget.bottle.tar.gz 12288
+Library/Caches/Homebrew/git--2.4.bottle.tar.gz 4096
+Library/Caches/com.other.app/blob 4096
+.ssh/id_ed25519 4096
