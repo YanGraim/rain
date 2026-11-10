@@ -48,6 +48,9 @@
 ~/Library/Application Support/MobileSync
 ~/Library/Application Support/AddressBook
 ~/Library/Application Support/Calendars
+~/Library/Caches/CloudKit
+~/Library/Caches/com.apple.bird
+~/Library/Caches/docker-secrets-engine
 
 # Password managers and wallets.
 ~/Library/Application Support/1Password

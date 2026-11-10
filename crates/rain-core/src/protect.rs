@@ -490,6 +490,10 @@ mod list_tests {
         "~/.config/gcloud",
         "~/.docker",
         "~/.password-store",
+        // FR-043
+        "~/Library/Caches/CloudKit",
+        "~/Library/Caches/com.apple.bird",
+        "~/Library/Caches/docker-secrets-engine",
     ];
 
     /// Splits text into tokens that each match one spelling in `EQUIVALENT`
@@ -646,13 +650,20 @@ mod list_tests {
     #[test]
     fn parent_of_protected_is_not_candidate() {
         let list = list();
-        for parent in ["/", "/Users", HOME, "~/Library", "~/Pictures", "~/.config"] {
+        for parent in [
+            "/",
+            "/Users",
+            HOME,
+            "~/Library",
+            "~/Pictures",
+            "~/.config",
+            "~/Library/Caches",
+        ] {
             let parent = p(parent);
             assert!(list.contains_protected(&parent), "{}", parent.display());
             assert!(!list.is_protected(&parent), "{}", parent.display());
         }
         assert!(list.contains_protected(&p("/USERS/tester/LIBRARY")));
-        assert!(!list.contains_protected(&p("~/Library/Caches")));
         assert!(!list.contains_protected(&p("~/Library/Caches/com.example")));
         assert!(!list.contains_protected(&p("~/Projects/node_modules")));
     }
@@ -668,7 +679,9 @@ mod list_tests {
             "~/Library/Developer/Xcode/DerivedData/App-abc",
         ] {
             assert!(!list.is_protected(&p(free)), "{free}");
-            assert!(!list.contains_protected(&p(free)), "{free}");
+            if free != "~/Library/Caches" {
+                assert!(!list.contains_protected(&p(free)), "{free}");
+            }
         }
     }
 
@@ -867,5 +880,165 @@ mod list_tests {
         assert!(list.is_protected_entry(alias, &meta(50)));
         assert!(!list.is_protected_entry(other, &meta(60)));
         assert!(list.is_protected_entry(&p("~/.ssh"), &meta(60)));
+    }
+}
+
+#[cfg(test)]
+mod caches_tests {
+    use super::*;
+    use crate::fs::{FakeFs, Metadata};
+    use crate::model::{ScanReport, SkipReason};
+    use crate::planner::{scan, ResolvedRoots, ScanContext};
+    use crate::rule::RuleContext;
+    use crate::rules;
+    use rain_platform::Os;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, SystemTime};
+    use unicode_normalization::UnicodeNormalization;
+
+    const HOME: &str = "/Users/Tester";
+    const CACHES: &str = "/Users/Tester/Library/Caches";
+    const NAMES: [&str; 3] = ["CloudKit", "com.apple.bird", "docker-secrets-engine"];
+
+    struct HomeAt(PathBuf);
+
+    impl Platform for HomeAt {
+        fn resolve(&self, _: Root) -> Result<PathBuf, PlatformError> {
+            Ok(self.0.clone())
+        }
+        fn is_root_user(&self) -> bool {
+            false
+        }
+        fn os(&self) -> Os {
+            Os::Macos
+        }
+    }
+
+    fn meta(is_dir: bool, ino: u64, blocks: u64) -> Metadata {
+        Metadata {
+            is_dir,
+            is_symlink: false,
+            dev: 1,
+            ino,
+            nlink: if is_dir { 2 } else { 1 },
+            blocks,
+            len: blocks * 512,
+            mtime: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn scan_caches(fs: &dyn Fs, home: &Path) -> ScanReport {
+        let protect = match ProtectList::builtin(&HomeAt(home.to_path_buf())) {
+            Ok(list) => list.with_identities(fs),
+            Err(e) => panic!("builtin failed: {e}"),
+        };
+        let library = home.join("Library");
+        let roots = ResolvedRoots {
+            home: home.to_path_buf(),
+            caches: library.join("Caches"),
+            logs: library.join("Logs"),
+        };
+        let ctx = ScanContext {
+            fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: Vec::new(),
+                now: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400),
+            },
+            threads: Some(1),
+        };
+        let selected = match rules::select(&["sys.user-caches"]) {
+            Ok(selected) => selected,
+            Err(e) => panic!("select failed: {e}"),
+        };
+        match scan(&selected, &ctx, &AtomicBool::new(false)) {
+            Ok(report) => report,
+            Err(e) => panic!("scan failed: {e}"),
+        }
+    }
+
+    fn variants(name: &str) -> Vec<String> {
+        let mut out = vec![
+            name.to_string(),
+            name.to_uppercase(),
+            name.to_lowercase(),
+            name.nfd().collect(),
+            name.nfc().collect(),
+        ];
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn assert_skipped(name: &str) {
+        let caches = Path::new(CACHES);
+        for spelling in variants(name) {
+            let target = caches.join(&spelling);
+            let mut fs = FakeFs::new();
+            fs.insert("/Users", meta(true, 100, 0))
+                .insert(HOME, meta(true, 101, 0))
+                .insert("/Users/Tester/Library", meta(true, 102, 0))
+                .insert(CACHES, meta(true, 103, 0))
+                .insert(&target, meta(true, 200, 0))
+                .insert(target.join("secret.db"), meta(false, 201, 64))
+                .insert(caches.join("free"), meta(false, 300, 4));
+            let report = scan_caches(&fs, Path::new(HOME));
+
+            let paths: Vec<&Path> = report.items.iter().map(|i| i.path.as_path()).collect();
+            assert_eq!(paths, vec![caches.join("free").as_path()], "{spelling}");
+            assert_eq!(report.total_bytes, 4 * 512, "{spelling}");
+            assert!(
+                report
+                    .skipped
+                    .iter()
+                    .any(|s| s.path == target && s.reason == SkipReason::Protected),
+                "{spelling} not skipped as protected"
+            );
+        }
+    }
+
+    // FR-043
+    #[test]
+    fn user_caches_skips_cloudkit() {
+        assert_skipped("CloudKit");
+    }
+
+    // FR-043
+    #[test]
+    fn user_caches_skips_com_apple_bird() {
+        assert_skipped("com.apple.bird");
+    }
+
+    // FR-043
+    #[test]
+    fn user_caches_skips_docker_secrets_engine() {
+        assert_skipped("docker-secrets-engine");
+    }
+
+    // FR-043
+    #[test]
+    fn decomposed_accented_spelling_matches_composed_entry() {
+        let list = match ProtectList::builtin(&HomeAt(PathBuf::from(HOME))) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        };
+        for name in NAMES {
+            for spelling in variants(name) {
+                let path = Path::new(CACHES).join(&spelling);
+                assert!(list.is_protected(&path), "{spelling}");
+                assert!(list.is_protected(&path.join("child")), "{spelling}");
+            }
+        }
+        let nfd_home: String = "/Users/Tést".nfd().collect();
+        let list = match ProtectList::builtin(&HomeAt(PathBuf::from("/Users/Tést"))) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        };
+        for name in NAMES {
+            let path = Path::new(&nfd_home).join("Library/Caches").join(name);
+            assert!(list.is_protected(&path), "{name}");
+        }
     }
 }
