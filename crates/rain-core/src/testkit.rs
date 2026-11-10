@@ -21,6 +21,9 @@ pub enum Violation {
     ProtectedItem(PathBuf),
     /// The scan reported an item reached through a symlink.
     FollowedSymlink(PathBuf),
+    /// A root the planner refuses: a `rel` that is absolute, has `.`/`..`,
+    /// an empty part or a trailing `/`.
+    InvalidRoot(PathBuf),
     /// The fixture itself could not be built.
     Setup(String),
 }
@@ -116,7 +119,7 @@ impl Bait {
     }
 }
 
-fn base(rooted: &RootedPath, roots: &ResolvedRoots) -> Option<PathBuf> {
+fn base(rooted: &RootedPath, roots: &ResolvedRoots) -> Result<PathBuf, PathBuf> {
     match rooted {
         RootedPath::Under(root, rel) => {
             let base = match root {
@@ -124,12 +127,22 @@ fn base(rooted: &RootedPath, roots: &ResolvedRoots) -> Option<PathBuf> {
                 Root::Caches => &roots.caches,
                 Root::Logs => &roots.logs,
             };
-            let rel = Path::new(rel);
-            rel.components()
-                .all(|c| matches!(c, Component::Normal(_)))
-                .then(|| base.join(rel))
+            if rel.is_empty() {
+                return Ok(base.clone());
+            }
+            let rel_path = Path::new(rel);
+            let plain = !rel.ends_with('/')
+                && !rel.split('/').any(|part| part.is_empty() || part == ".")
+                && rel_path
+                    .components()
+                    .all(|c| matches!(c, Component::Normal(_)));
+            if plain {
+                Ok(base.join(rel_path))
+            } else {
+                Err(base.join(rel_path))
+            }
         }
-        RootedPath::User(p) => Some(p.clone()),
+        RootedPath::User(p) => Ok(p.clone()),
     }
 }
 
@@ -176,8 +189,12 @@ fn run(rule: &dyn Rule) -> (Vec<Violation>, Option<ScanReport>) {
     let mut violations = Vec::new();
     let mut planted = Vec::new();
     for rooted in files.roots(&rule_ctx) {
-        let Some(root) = base(&rooted, &roots) else {
-            continue;
+        let root = match base(&rooted, &roots) {
+            Ok(root) => root,
+            Err(invalid) => {
+                violations.push(Violation::InvalidRoot(invalid));
+                continue;
+            }
         };
         if names.is_protected(&root) {
             violations.push(Violation::ProtectedRoot(root));
@@ -346,6 +363,95 @@ mod tests {
                 .any(|i| i.path == root.join("old.cache")),
             "{report:?}"
         );
+    }
+
+    // NFR-005, FR-007: a root the planner would refuse is reported, never
+    // silently dropped.
+    #[test]
+    fn testkit_reports_invalid_root() {
+        for rel in [
+            "..",
+            "../x",
+            "./x",
+            "x/./y",
+            "x/",
+            "/etc",
+            "/Users/rain/.ssh",
+        ] {
+            let err = check_rule_protects(&children_of(rel)).unwrap_err();
+            assert!(
+                err.iter().any(|v| matches!(v, Violation::InvalidRoot(_))),
+                "{rel}: {err:?}"
+            );
+        }
+    }
+
+    struct NoteReadDir<'a> {
+        inner: &'a FakeFs,
+        on_symlink: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl Fs for NoteReadDir<'_> {
+        fn symlink_metadata(&self, p: &Path) -> std::io::Result<Metadata> {
+            self.inner.symlink_metadata(p)
+        }
+        fn read_dir(&self, p: &Path) -> std::io::Result<Vec<crate::fs::DirEntryInfo>> {
+            if self.inner.symlink_metadata(p).is_ok_and(|m| m.is_symlink) {
+                if let Ok(mut seen) = self.on_symlink.lock() {
+                    seen.push(p.to_path_buf());
+                }
+            }
+            self.inner.read_dir(p)
+        }
+        fn canonicalize(&self, p: &Path) -> std::io::Result<PathBuf> {
+            self.inner.canonicalize(p)
+        }
+    }
+
+    // NFR-005, FR-004: the walker never lists a symlink, so FakeFs's
+    // `NotADirectory` there never differs from the real filesystem in a scan.
+    #[test]
+    fn walker_never_reads_dir_of_symlink() {
+        let home = PathBuf::from(HOME);
+        let root = home.join("Library/Caches/App");
+        let mut bait = Bait {
+            fs: FakeFs::new(),
+            next_ino: 100,
+        };
+        bait.dir(&home.join(".ssh"), Some(SSH_INO));
+        bait.plant(&root);
+        bait.fs
+            .insert_symlink(root.join("to-dir"), home.join("Library"));
+        let fs = NoteReadDir {
+            inner: &bait.fs,
+            on_symlink: std::sync::Mutex::new(Vec::new()),
+        };
+        let protect = ProtectList::builtin(&FakeHome)
+            .unwrap()
+            .with_identities(&fs);
+        let roots = ResolvedRoots {
+            home: home.clone(),
+            caches: home.join("Library/Caches"),
+            logs: home.join("Library/Logs"),
+        };
+        let ctx = ScanContext {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: Vec::new(),
+                now: SystemTime::UNIX_EPOCH,
+            },
+            threads: Some(2),
+        };
+        for rule in [
+            takes("Library/Caches/App"),
+            children_of("Library/Caches/App"),
+        ] {
+            scan(&[&rule], &ctx, &AtomicBool::new(false)).unwrap();
+        }
+        assert_eq!(*fs.on_symlink.lock().unwrap(), Vec::<PathBuf>::new());
     }
 
     // NFR-005, FR-007: taking a whole folder that holds an alias of a
