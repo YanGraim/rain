@@ -9,6 +9,8 @@ pub mod protect;
 pub mod rule;
 pub mod rules;
 pub mod size;
+#[cfg(any(test, feature = "testing"))]
+pub mod testkit;
 pub mod walk;
 
 /// Crate version, shared across the workspace.
