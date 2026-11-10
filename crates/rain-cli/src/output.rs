@@ -78,7 +78,8 @@ pub(crate) fn escape_for_terminal(s: &str) -> String {
 
 // C1 plus the Unicode categories Cf (format), Zl and Zp (line/paragraph
 // separators), written by hand to avoid a Unicode-tables dependency. These
-// reorder, hide or break text on a terminal (FR-010).
+// reorder, hide or break text on a terminal (FR-010). The list follows
+// Unicode 16.0; recheck it when a new Unicode version adds Cf characters.
 fn is_invisible_or_control(c: char) -> bool {
     matches!(
         c,
@@ -522,5 +523,75 @@ mod tests {
         let out = render_table(&full_report(), &en());
         assert!(out.contains("1.2 GB"), "{out}");
         assert!(out.contains("4.1 kB"), "{out}");
+    }
+
+    // Oracle for the clean-output property, kept apart from the production
+    // table on purpose: Cc comes from std (`char::is_control`), and Cf, Zl
+    // and Zp are listed here from Unicode 16.0 DerivedGeneralCategory.
+    const CF_ZL_ZP: &[(u32, u32)] = &[
+        (0xad, 0xad),
+        (0x600, 0x605),
+        (0x61c, 0x61c),
+        (0x6dd, 0x6dd),
+        (0x70f, 0x70f),
+        (0x890, 0x891),
+        (0x8e2, 0x8e2),
+        (0x180e, 0x180e),
+        (0x200b, 0x200f),
+        (0x2028, 0x2029),
+        (0x202a, 0x202e),
+        (0x2060, 0x2064),
+        (0x2066, 0x206f),
+        (0xfeff, 0xfeff),
+        (0xfff9, 0xfffb),
+        (0x110bd, 0x110bd),
+        (0x110cd, 0x110cd),
+        (0x13430, 0x1343f),
+        (0x1bca0, 0x1bca3),
+        (0x1d173, 0x1d17a),
+        (0xe0001, 0xe0001),
+        (0xe0020, 0xe007f),
+    ];
+
+    fn is_cc_cf_zl_zp(c: char) -> bool {
+        let n = u32::from(c);
+        c.is_control() || CF_ZL_ZP.iter().any(|&(lo, hi)| (lo..=hi).contains(&n))
+    }
+
+    // Biased toward the dangerous ranges and the escape syntax itself, so
+    // collisions like a literal "\\x1b" versus ESC are actually exercised.
+    fn hostile_char() -> impl proptest::strategy::Strategy<Value = char> {
+        use proptest::prelude::*;
+        let from_table = proptest::sample::select(CF_ZL_ZP.to_vec())
+            .prop_flat_map(|(lo, hi)| lo..=hi)
+            .prop_filter_map("valid char", char::from_u32);
+        prop_oneof![
+            3 => proptest::char::range('\u{0}', '\u{9f}'),
+            3 => from_table,
+            2 => proptest::sample::select(vec!['\\', 'x', 'u', '{', '}', 'n', 'r', 't', '0', '1', 'b', 'f']),
+            2 => any::<char>(),
+        ]
+    }
+
+    fn hostile_string() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::strategy::Strategy;
+        proptest::collection::vec(hostile_char(), 0..12).prop_map(|v| v.into_iter().collect())
+    }
+
+    proptest::proptest! {
+        // FR-010: two different names must never print the same.
+        #[test]
+        fn escape_is_injective(a in hostile_string(), b in hostile_string()) {
+            proptest::prop_assume!(a != b);
+            proptest::prop_assert_ne!(escape_for_terminal(&a), escape_for_terminal(&b));
+        }
+
+        // FR-010: printed text never carries a Cc, Cf, Zl or Zp character.
+        #[test]
+        fn escape_output_has_no_control_or_format_chars(s in hostile_string()) {
+            let out = escape_for_terminal(&s);
+            let bad: Vec<char> = out.chars().filter(|&c| is_cc_cf_zl_zp(c)).collect();
+            proptest::prop_assert!(bad.is_empty(), "{:?} -> {:?} has {:?}", s, out, bad);
+        }
     }
 }

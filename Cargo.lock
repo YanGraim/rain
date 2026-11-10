@@ -356,6 +356,7 @@ dependencies = [
  "anyhow",
  "clap",
  "insta",
+ "proptest",
  "rain-core",
  "rain-platform",
  "serde_json",
