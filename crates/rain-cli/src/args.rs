@@ -149,9 +149,9 @@ mod tests {
     fn parses_repeated_rules_paths_age_and_json() {
         let args = scan_args(&[
             "--rule",
-            "macos.user.logs",
+            "sys.logs",
             "--rule",
-            "dev.node-modules",
+            "proj.node-modules",
             "--path",
             "/a",
             "--path",
@@ -160,7 +160,7 @@ mod tests {
             "7",
             "--json",
         ]);
-        assert_eq!(args.rules, ["macos.user.logs", "dev.node-modules"]);
+        assert_eq!(args.rules, ["sys.logs", "proj.node-modules"]);
         assert_eq!(args.paths, [PathBuf::from("/a"), PathBuf::from("b")]);
         assert_eq!(args.min_age_days, 7);
         assert!(args.json);
