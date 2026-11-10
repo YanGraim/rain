@@ -22,5 +22,6 @@
   "help.path": "Pasta onde procurar node_modules (pode repetir; padrão: home)",
   "help.min-age-days": "Dias sem alteração para um projeto contar como inativo",
   "help.json": "Imprime um documento JSON em vez de uma tabela",
-  "error.invalid-home": "A pasta home não pode ser usada: {reason}"
+  "error.invalid-home": "A pasta home não pode ser usada: {reason}",
+  "error.unsupported-os": "Este sistema operacional ainda não é suportado."
 }

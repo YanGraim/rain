@@ -83,6 +83,7 @@ pub enum MessageKey {
     HelpMinAgeDays,
     HelpJson,
     InvalidHome,
+    UnsupportedOs,
 }
 
 impl MessageKey {
@@ -108,6 +109,7 @@ impl MessageKey {
         MessageKey::HelpMinAgeDays,
         MessageKey::HelpJson,
         MessageKey::InvalidHome,
+        MessageKey::UnsupportedOs,
     ];
 
     /// Key as written in the locale file.
@@ -134,6 +136,7 @@ impl MessageKey {
             MessageKey::HelpMinAgeDays => "help.min-age-days",
             MessageKey::HelpJson => "help.json",
             MessageKey::InvalidHome => "error.invalid-home",
+            MessageKey::UnsupportedOs => "error.unsupported-os",
         }
     }
 }
