@@ -10,9 +10,15 @@ name = "rain"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
+# Argument parsing; usage errors map to exit code 2 (FR-012).
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 rain-core = { path = "../rain-core" }
 rain-platform = { path = "../rain-platform" }
 serde_json = "1"
 
 [dev-dependencies]
 insta = "1"
+rain-core = { path = "../rain-core", features = ["testing"] }
+rain-platform = { path = "../rain-platform", features = ["testing"] }
+tempfile = "3"
