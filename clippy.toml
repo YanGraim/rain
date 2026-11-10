@@ -34,6 +34,8 @@ disallowed-methods = [
     { path = "std::process::Command::new", reason = "external processes bypass the read-only guarantee" },
     # NFR-006: the scan is offline; no sockets.
     { path = "std::net::TcpStream::connect", reason = "rain never uses the network" },
+    { path = "std::net::TcpStream::connect_timeout", reason = "rain never uses the network" },
+    { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "does a DNS lookup; rain never uses the network" },
     { path = "std::net::UdpSocket::bind", reason = "rain never uses the network" },
     { path = "std::net::TcpListener::bind", reason = "rain never uses the network" },
 ]

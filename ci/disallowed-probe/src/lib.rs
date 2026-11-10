@@ -45,6 +45,9 @@ pub fn unix(p: &Path, f: &File) -> io::Result<()> {
 
 pub fn net() -> io::Result<()> {
     let _ = std::net::TcpStream::connect("127.0.0.1:1")?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 1));
+    let _ = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(1))?;
+    let _ = std::net::ToSocketAddrs::to_socket_addrs("localhost:1")?;
     let _ = std::net::UdpSocket::bind("127.0.0.1:0")?;
     let _ = std::net::TcpListener::bind("127.0.0.1:0")?;
     Ok(())
