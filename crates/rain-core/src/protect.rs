@@ -1199,6 +1199,30 @@ mod engines_tests {
 
     // FR-020
     #[test]
+    fn lima_data_and_ssh_key_are_protected() {
+        assert_engine_protected(".lima/_config/user");
+    }
+
+    // FR-020
+    #[test]
+    fn podman_config_and_auth_are_protected() {
+        assert_engine_protected(".config/containers/auth.json");
+    }
+
+    // FR-020
+    #[test]
+    fn rancher_desktop_data_is_protected() {
+        assert_engine_protected("Library/Application Support/rancher-desktop");
+    }
+
+    // FR-020
+    #[test]
+    fn rd_folder_is_protected() {
+        assert_engine_protected(".rd");
+    }
+
+    // FR-020
+    #[test]
     fn podman_data_is_protected() {
         assert_engine_protected(".local/share/containers");
     }

@@ -53,10 +53,16 @@
 ~/Library/Caches/docker-secrets-engine
 
 # Container engines: VM disks and data, cleaned only by the engine itself.
+# Docker's group container is already covered by ~/Library/Group Containers.
 ~/Library/Containers/com.docker.docker
-~/Library/Group Containers/group.com.docker
 ~/.orbstack
 ~/.colima
+# Lima VMs and their SSH private key (_config/user).
+~/.lima
+# Podman config, including registry credentials (auth.json).
+~/.config/containers
+~/Library/Application Support/rancher-desktop
+~/.rd
 ~/.local/share/containers
 
 # Password managers and wallets.
