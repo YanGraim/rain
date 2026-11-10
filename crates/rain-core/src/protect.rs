@@ -1042,3 +1042,164 @@ mod caches_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod engines_tests {
+    use super::*;
+    use crate::fs::{FakeFs, Metadata};
+    use crate::model::{ScanReport, SkipReason};
+    use crate::planner::{scan, ResolvedRoots, ScanContext};
+    use crate::rule::RuleContext;
+    use crate::rules;
+    use rain_platform::Os;
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, SystemTime};
+    use unicode_normalization::UnicodeNormalization;
+
+    const HOME: &str = "/Users/Tester";
+
+    struct HomeAt(PathBuf);
+
+    impl Platform for HomeAt {
+        fn resolve(&self, _: Root) -> Result<PathBuf, PlatformError> {
+            Ok(self.0.clone())
+        }
+        fn is_root_user(&self) -> bool {
+            false
+        }
+        fn os(&self) -> Os {
+            Os::Macos
+        }
+    }
+
+    fn meta(is_dir: bool, ino: u64, blocks: u64) -> Metadata {
+        Metadata {
+            is_dir,
+            is_symlink: false,
+            dev: 1,
+            ino,
+            nlink: if is_dir { 2 } else { 1 },
+            blocks,
+            len: blocks * 512,
+            mtime: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn builtin() -> ProtectList {
+        match ProtectList::builtin(&HomeAt(PathBuf::from(HOME))) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        }
+    }
+
+    /// Case and Unicode spellings of a home-relative path.
+    fn variants(rel: &str) -> Vec<String> {
+        let mut out = vec![
+            rel.to_string(),
+            rel.to_uppercase(),
+            rel.to_lowercase(),
+            rel.nfd().collect(),
+            rel.nfc().collect(),
+        ];
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Scans `--path <target>` with the generic `proj.node-modules` rule
+    /// over a stale project that would otherwise be a candidate.
+    fn scan_engine_dir(target: &Path) -> ScanReport {
+        let mut fs = FakeFs::new();
+        let mut dir = PathBuf::new();
+        for (ino, c) in (100..).zip(target.components()) {
+            dir.push(c);
+            fs.insert(&dir, meta(true, ino, 0));
+        }
+        let project = target.join("proj");
+        fs.insert(&project, meta(true, 200, 0))
+            .insert(project.join("package.json"), meta(false, 201, 1))
+            .insert(project.join("node_modules"), meta(true, 202, 0))
+            .insert(project.join("node_modules/a.js"), meta(false, 203, 64));
+        let home = Path::new(HOME);
+        let protect = builtin().with_identities(&fs);
+        let library = home.join("Library");
+        let roots = ResolvedRoots {
+            home: home.to_path_buf(),
+            caches: library.join("Caches"),
+            logs: library.join("Logs"),
+        };
+        let ctx = ScanContext {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: vec![target.to_path_buf()],
+                now: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400),
+            },
+            threads: Some(1),
+        };
+        let selected = match rules::select(&["proj.node-modules"]) {
+            Ok(selected) => selected,
+            Err(e) => panic!("select failed: {e}"),
+        };
+        match scan(&selected, &ctx, &AtomicBool::new(false)) {
+            Ok(report) => report,
+            Err(e) => panic!("scan failed: {e}"),
+        }
+    }
+
+    fn assert_engine_protected(rel: &str) {
+        let list = builtin();
+        for spelling in variants(rel) {
+            let target = Path::new(HOME).join(&spelling);
+            assert!(list.is_protected(&target), "{spelling}");
+            assert!(
+                list.is_protected(&target.join("Data/disk.raw")),
+                "{spelling}"
+            );
+            let report = scan_engine_dir(&target);
+            assert!(report.items.is_empty(), "{spelling} listed");
+            assert_eq!(report.total_bytes, 0, "{spelling}");
+            assert!(
+                report
+                    .skipped
+                    .iter()
+                    .any(|s| s.reason == SkipReason::Protected
+                        && (target.starts_with(&s.path) || s.path.starts_with(&target))),
+                "{spelling} not skipped as protected: {:?}",
+                report.skipped
+            );
+        }
+    }
+
+    // FR-020
+    #[test]
+    fn docker_desktop_container_is_protected() {
+        assert_engine_protected("Library/Containers/com.docker.docker");
+    }
+
+    // FR-020
+    #[test]
+    fn docker_group_container_is_protected() {
+        assert_engine_protected("Library/Group Containers/group.com.docker");
+    }
+
+    // FR-020
+    #[test]
+    fn orbstack_data_is_protected() {
+        assert_engine_protected(".orbstack");
+    }
+
+    // FR-020
+    #[test]
+    fn colima_data_is_protected() {
+        assert_engine_protected(".colima");
+    }
+
+    // FR-020
+    #[test]
+    fn podman_data_is_protected() {
+        assert_engine_protected(".local/share/containers");
+    }
+}
