@@ -298,6 +298,7 @@ name = "rain-cli"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "proptest",
  "rain-core",
  "rain-platform",
  "serde_json",
