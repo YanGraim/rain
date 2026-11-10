@@ -1,0 +1,12 @@
+---
+source: crates/rain-cli/src/output.rs
+expression: out
+---
+Rule               Path                          Size
+macos.user.caches  /c/a\x1b[2Kb                1.0 kB
+macos.user.caches  /c/a\rb                     1.0 kB
+macos.user.caches  /c/a\nb                     1.0 kB
+macos.user.caches  /c/\x1b]52;c;ZXZpbA==\x07x  1.0 kB
+macos.user.caches  /c/\u{202e}txt.exe          1.0 kB
+macos.user.caches  /c/a\\x1bb                  1.0 kB
+Total                                          6.0 kB

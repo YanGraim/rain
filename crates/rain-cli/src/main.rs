@@ -1,1 +1,3 @@
+mod output;
+
 fn main() {}

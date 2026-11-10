@@ -1,0 +1,9 @@
+---
+source: crates/rain-cli/src/output.rs
+expression: "render_table(&full_report(), &pt)"
+---
+Regra              Caminho                        Tamanho
+macos.user.caches  /Users/u/Library/Caches/com.a   1.2 GB
+macos.user.caches  /Users/u/Library/Caches/com.b   4.1 kB
+Total                                              1.2 GB
+8 itens ignorados

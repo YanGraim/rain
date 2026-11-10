@@ -1,0 +1,74 @@
+---
+source: crates/rain-cli/src/output.rs
+expression: render_json(&full_report())
+---
+{
+  "items": [
+    {
+      "allocated_bytes": 1200000000,
+      "file_count": 3,
+      "id": "a5ec3b3673b68f68",
+      "path": "/Users/u/Library/Caches/com.a",
+      "rule": "macos.user.caches"
+    },
+    {
+      "allocated_bytes": 4096,
+      "file_count": 1,
+      "id": "a5ec3e3673b69481",
+      "path": "/Users/u/Library/Caches/com.b",
+      "rule": "macos.user.caches"
+    }
+  ],
+  "rules": [
+    {
+      "allocated_bytes": 1200004096,
+      "category": "system-caches",
+      "id": "macos.user.caches",
+      "items": 2,
+      "risk": "low"
+    },
+    {
+      "allocated_bytes": 0,
+      "category": "logs",
+      "id": "macos.user.logs",
+      "items": 0,
+      "risk": "low"
+    }
+  ],
+  "schema_version": 1,
+  "skipped": [
+    {
+      "path": "/Users/u/Library/Caches/a",
+      "reason": "permission-denied"
+    },
+    {
+      "path": "/Users/u/Library/Caches/b",
+      "reason": "protected"
+    },
+    {
+      "path": "/Users/u/Library/Caches/c",
+      "reason": "symlink"
+    },
+    {
+      "path": "/Users/u/Library/Caches/d",
+      "reason": "other-volume"
+    },
+    {
+      "path": "/Users/u/Library/Caches/e",
+      "reason": "not-found"
+    },
+    {
+      "path": "/Users/u/Library/Caches/f",
+      "reason": "invalid-root"
+    },
+    {
+      "path": "/Users/u/Library/Caches/g",
+      "reason": "io:timed-out"
+    },
+    {
+      "path": "/Users/u/Library/Caches/h",
+      "reason": "io:other"
+    }
+  ],
+  "total_bytes": 1200004096
+}
