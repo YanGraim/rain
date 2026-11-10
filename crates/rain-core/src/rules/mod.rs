@@ -18,7 +18,7 @@ mod user;
 use std::sync::OnceLock;
 
 use crate::model::{Risk, RuleId};
-use crate::rule::Rule;
+use crate::rule::{Rule, RuleKind, RuleMeta};
 
 // FR-001
 static ORDER: &[&[&dyn Rule]] = &[
@@ -41,13 +41,45 @@ pub fn builtin() -> &'static [&'static dyn Rule] {
     BUILTIN.get_or_init(|| assemble(ORDER))
 }
 
-// FR-014
+// FR-014 / ADR 0005
 fn assemble<'r>(slices: &[&[&'r dyn Rule]]) -> Vec<&'r dyn Rule> {
     slices
         .iter()
         .flat_map(|slice| slice.iter().copied())
-        .filter(|r| !(r.meta().risk == Risk::High && r.meta().default_selected))
+        .map(|rule| {
+            let meta = rule.meta();
+            if meta.risk == Risk::High && meta.default_selected {
+                debug_assert!(false, "{} is high and default selected", meta.id);
+                demote(rule)
+            } else {
+                rule
+            }
+        })
         .collect()
+}
+
+// FR-014
+struct Demoted<'r> {
+    inner: &'r dyn Rule,
+    meta: RuleMeta,
+}
+
+impl Rule for Demoted<'_> {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        self.inner.kind()
+    }
+}
+
+// FR-014 / ADR 0005
+fn demote(rule: &dyn Rule) -> &dyn Rule {
+    let meta = RuleMeta {
+        default_selected: false,
+        ..rule.meta().clone()
+    };
+    Box::leak(Box::new(Demoted { inner: rule, meta }))
 }
 
 /// FR-008: an `--rule` id that does not exist.
@@ -91,7 +123,7 @@ fn select_from<'r>(
 mod tests {
     use super::*;
     use crate::fs::Fs;
-    use crate::model::Category;
+    use crate::model::{Category, Risk};
     use crate::rule::{EntryInfo, FileRule, RootedPath, RuleContext, RuleKind, RuleMeta, Visit};
 
     struct Named(RuleMeta);
@@ -257,18 +289,49 @@ mod tests {
         assert_eq!(ids(&joined), ["c.three", "a.one", "b.two"]);
     }
 
-    // FR-014: a high risk rule marked default selected is rejected when the
-    // registry is assembled.
+    // FR-014: no rule in the real order is high risk and default selected.
     #[test]
-    fn assemble_rejects_high_risk_default_selected() {
+    fn order_has_no_high_risk_default_selected() {
+        for rule in ORDER.iter().flat_map(|s| s.iter()) {
+            let meta = rule.meta();
+            assert!(
+                !(meta.risk == Risk::High && meta.default_selected),
+                "{} is high and default selected",
+                meta.id
+            );
+        }
+    }
+
+    // FR-014 / ADR 0005: nothing is dropped, so no item falls to a lower
+    // risk rule.
+    #[test]
+    fn builtin_keeps_every_rule_in_order() {
+        let total: usize = ORDER.iter().map(|s| s.len()).sum();
+        assert_eq!(builtin().len(), total);
+    }
+
+    // FR-014 / ADR 0005: a high risk default selected rule stays in place,
+    // keeps its kind and id, and is no longer default selected.
+    #[test]
+    fn demote_keeps_rule_but_unselects_it() {
         let mut bad = named("x.bad");
         bad.0.risk = Risk::High;
-        let mut ok = named("x.ok");
-        ok.0.risk = Risk::High;
-        ok.0.default_selected = false;
-        let good = named("x.low");
-        let slice: [&dyn Rule; 3] = [&bad, &ok, &good];
-        assert_eq!(ids(&assemble(&[&slice])), ["x.ok", "x.low"]);
+        let demoted = demote(&bad);
+        assert_eq!(demoted.meta().id.as_str(), "x.bad");
+        assert_eq!(demoted.meta().risk, Risk::High);
+        assert!(!demoted.meta().default_selected);
+        assert!(matches!(demoted.kind(), RuleKind::Files(_)));
+    }
+
+    // FR-014
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "high and default selected")]
+    fn assemble_panics_in_debug_on_high_risk_default_selected() {
+        let mut bad = named("x.bad");
+        bad.0.risk = Risk::High;
+        let slice: [&dyn Rule; 1] = [&bad];
+        let _ = assemble(&[&slice]);
     }
 
     // FR-002 / ADR 0005: the registry order is homebrew, xcode, logs, caches.
