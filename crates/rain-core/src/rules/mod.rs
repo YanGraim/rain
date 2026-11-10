@@ -2,25 +2,52 @@
 //! the same path, the earlier one keeps it (ADR 0005), so more specific
 //! rules come first.
 
+mod ai;
+mod apple;
+mod browser;
 mod children;
+mod containers;
 mod macos;
+mod models;
 mod node_modules;
+mod pkg;
+mod proj;
+mod sys;
 mod user;
 
-use crate::model::RuleId;
+use std::sync::OnceLock;
+
+use crate::model::{Risk, RuleId};
 use crate::rule::Rule;
 
-/// Built-in rules, most specific first.
-static BUILTIN: &[&dyn Rule] = &[
-    &macos::HOMEBREW_CACHE,
-    &macos::XCODE_DERIVED_DATA,
-    &user::USER_LOGS,
-    &user::USER_CACHES,
-    &node_modules::NODE_MODULES,
+// FR-001
+static ORDER: &[&[&dyn Rule]] = &[
+    ai::RULES,
+    models::RULES,
+    containers::RULES,
+    pkg::RULES,
+    &[&macos::HOMEBREW_CACHE],
+    apple::RULES,
+    &[&macos::XCODE_DERIVED_DATA],
+    browser::RULES,
+    sys::RULES,
+    &[&user::USER_LOGS, &user::USER_CACHES],
+    proj::RULES,
+    &[&node_modules::NODE_MODULES],
 ];
 
 pub fn builtin() -> &'static [&'static dyn Rule] {
-    BUILTIN
+    static BUILTIN: OnceLock<Vec<&'static dyn Rule>> = OnceLock::new();
+    BUILTIN.get_or_init(|| assemble(ORDER))
+}
+
+// FR-014
+fn assemble<'r>(slices: &[&[&'r dyn Rule]]) -> Vec<&'r dyn Rule> {
+    slices
+        .iter()
+        .flat_map(|slice| slice.iter().copied())
+        .filter(|r| !(r.meta().risk == Risk::High && r.meta().default_selected))
+        .collect()
 }
 
 /// FR-008: an `--rule` id that does not exist.
@@ -64,7 +91,7 @@ fn select_from<'r>(
 mod tests {
     use super::*;
     use crate::fs::Fs;
-    use crate::model::{Category, Risk};
+    use crate::model::Category;
     use crate::rule::{EntryInfo, FileRule, RootedPath, RuleContext, RuleKind, RuleMeta, Visit};
 
     struct Named(RuleMeta);
@@ -217,6 +244,31 @@ mod tests {
         assert_eq!(category("pkg.homebrew"), Category::PackageManagers);
         assert_eq!(category("sys.user-caches"), Category::SystemCaches);
         assert_eq!(category("sys.logs"), Category::Logs);
+    }
+
+    // FR-001 / ADR 0005: slices are joined in the given order, keeping each
+    // slice's own order.
+    #[test]
+    fn category_slices_concatenate_in_fixed_order() {
+        let (a, b, c) = (named("a.one"), named("b.two"), named("c.three"));
+        let first: [&dyn Rule; 2] = [&a, &b];
+        let second: [&dyn Rule; 1] = [&c];
+        let joined = assemble(&[&second, &[], &first]);
+        assert_eq!(ids(&joined), ["c.three", "a.one", "b.two"]);
+    }
+
+    // FR-014: a high risk rule marked default selected is rejected when the
+    // registry is assembled.
+    #[test]
+    fn assemble_rejects_high_risk_default_selected() {
+        let mut bad = named("x.bad");
+        bad.0.risk = Risk::High;
+        let mut ok = named("x.ok");
+        ok.0.risk = Risk::High;
+        ok.0.default_selected = false;
+        let good = named("x.low");
+        let slice: [&dyn Rule; 3] = [&bad, &ok, &good];
+        assert_eq!(ids(&assemble(&[&slice])), ["x.ok", "x.low"]);
     }
 
     // FR-002 / ADR 0005: the registry order is homebrew, xcode, logs, caches.
