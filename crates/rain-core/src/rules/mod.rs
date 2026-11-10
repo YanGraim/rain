@@ -234,7 +234,26 @@ mod tests {
     #[test]
     fn rules_from_scan_macos_are_default_selected() {
         for rule in builtin() {
-            assert!(rule.meta().default_selected, "{}", rule.meta().id);
+            let meta = rule.meta();
+            if meta.id.as_str() == "proj.node-modules" {
+                assert!(!meta.default_selected, "{}", meta.id);
+            } else {
+                assert!(meta.default_selected, "{}", meta.id);
+            }
+        }
+    }
+
+    // FR-010
+    #[test]
+    fn medium_and_high_rules_are_never_default_selected() {
+        for rule in builtin() {
+            let meta = rule.meta();
+            assert!(
+                meta.risk == Risk::Low || !meta.default_selected,
+                "{} is {:?} and default selected",
+                meta.id,
+                meta.risk
+            );
         }
     }
 
