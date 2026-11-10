@@ -20,7 +20,8 @@ pub static USER_CACHES: ChildrenOf = ChildrenOf {
         os: &[Os::Macos],
     },
     root: Root::Caches,
-    rel: "",
+    rels: &[""],
+    depth: 1,
 };
 
 /// `sys.logs`: contents of `~/Library/Logs`.
@@ -36,7 +37,8 @@ pub static USER_LOGS: ChildrenOf = ChildrenOf {
         os: &[Os::Macos],
     },
     root: Root::Logs,
-    rel: "",
+    rels: &[""],
+    depth: 1,
 };
 
 #[cfg(test)]

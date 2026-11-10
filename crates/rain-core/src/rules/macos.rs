@@ -19,7 +19,8 @@ pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
         os: &[Os::Macos],
     },
     root: Root::Home,
-    rel: "Library/Developer/Xcode/DerivedData",
+    rels: &["Library/Developer/Xcode/DerivedData"],
+    depth: 1,
 };
 
 /// FR-002: Homebrew download cache inside `{caches}`. Listed before the
@@ -36,7 +37,8 @@ pub static HOMEBREW_CACHE: ChildrenOf = ChildrenOf {
         os: &[Os::Macos],
     },
     root: Root::Caches,
-    rel: "Homebrew",
+    rels: &["Homebrew"],
+    depth: 1,
 };
 
 #[cfg(test)]
