@@ -90,6 +90,9 @@ jobs:
         shell: bash
         run: ./scripts/check-binary-size.sh
       # NFR-006: no network crates in the shipped dependency graph.
+      - name: No-network check self-test
+        shell: bash
+        run: ./scripts/test-check-no-network.sh
       - name: No network crates
         shell: bash
         run: ./scripts/check-no-network.sh

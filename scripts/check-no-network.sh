@@ -5,16 +5,30 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "::error::cargo not found on PATH"
-  exit 1
+# Exact names, plus whole families matched by prefix (`hyper*`, `rustls*`, ...)
+# so a new sub-crate of a banned family cannot slip through.
+exact='h2|ureq|isahc|surf|attohttpc|minreq|ehttp|awc|axum|warp|tonic|native-tls|socket2|mio|quinn|trust-dns-resolver|hickory-resolver|async-std|async-net|async-io|smol|tokio-rustls|reqwless|ssh2|libssh2-sys|zmq|nng|websocket|tungstenite|tokio-tungstenite'
+prefix='reqwest|hyper|rustls|curl|openssl|actix|libp2p'
+banned="^((${exact})|(${prefix})[A-Za-z0-9_-]*)\$"
+
+# Usage: check-no-network.sh [--tree-file FILE]
+# --tree-file reads canned `cargo tree --prefix none --format '{p}|{f}'`
+# output instead of running cargo; used by test-check-no-network.sh.
+if [ "${1:-}" = "--tree-file" ]; then
+  if [ -z "${2:-}" ] || [ ! -r "$2" ]; then
+    echo "::error::--tree-file needs a readable file"
+    exit 1
+  fi
+  tree="$(cat "$2")"
+else
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "::error::cargo not found on PATH"
+    exit 1
+  fi
+  # `cargo tree` failing must fail the check, so it is not run inside a pipe.
+  tree="$(cargo tree --locked --manifest-path "$root/Cargo.toml" -p rain-cli \
+    -e normal,features --prefix none --format '{p}|{f}')"
 fi
-
-banned='^(reqwest|hyper|hyper-util|h2|ureq|curl|curl-sys|isahc|surf|attohttpc|minreq|ehttp|awc|actix-web|axum|warp|tonic|tungstenite|tokio-tungstenite|native-tls|rustls|openssl|openssl-sys|socket2|mio|libp2p|quinn|trust-dns-resolver|hickory-resolver)$'
-
-# `cargo tree` failing must fail the check, so it is not run inside a pipe.
-tree="$(cargo tree --locked --manifest-path "$root/Cargo.toml" -p rain-cli \
-  -e normal,features --prefix none --format '{p}|{f}')"
 
 offenders="$(
   awk -F'|' '{ split($1, p, " "); print p[1] }' <<<"$tree" | grep -E "$banned" | sort -u || true
