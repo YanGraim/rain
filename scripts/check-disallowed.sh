@@ -10,7 +10,26 @@ probe="$root/ci/disallowed-probe"
 # Entries that cannot be called on the stable toolchain (unstable API).
 skip='^std::fs::set_permissions_nofollow$'
 
-out="$(cd "$probe" && cargo clippy --locked --quiet --lib --target-dir "$root/target/disallowed-probe" -- -D warnings 2>&1 || true)"
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "::error::cargo not found on PATH"
+  exit 1
+fi
+
+# The probe is expected to fail clippy (every call is a lint hit), so a
+# non-zero exit is normal. It must be a lint failure, though, not a missing
+# toolchain or a build error that would hide every hit.
+status=0
+out="$(cd "$probe" && cargo clippy --locked --quiet --lib --target-dir "$root/target/disallowed-probe" -- -D warnings 2>&1)" || status=$?
+
+if [ "$status" -eq 0 ]; then
+  echo "::error::clippy passed on the probe; no disallowed method fired"
+  exit 1
+fi
+if ! grep -q 'disallowed method' <<<"$out"; then
+  echo "::error::clippy failed (exit $status) without any disallowed-method hit:"
+  echo "$out"
+  exit 1
+fi
 
 if grep -q 'does not refer to' <<<"$out"; then
   echo "::error::clippy.toml has a path that does not resolve:"
