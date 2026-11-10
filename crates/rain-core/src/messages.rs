@@ -85,6 +85,18 @@ pub enum MessageKey {
     InvalidHome,
     UnsupportedOs,
     RenderJsonFailed,
+    ReportUnmanaged,
+    ReportUnmanagedNote,
+    ReportToolTotal,
+    ReportToolTotalNote,
+    ProviderUnavailableNotInstalled,
+    ProviderUnavailableNotRunning,
+    ProviderUnavailableTimeout,
+    ProviderUnavailableCancelled,
+    ProviderUnavailableOutputTooLarge,
+    ProviderUnavailableDenied,
+    ProviderUnavailableParse,
+    ProviderUnavailableIo,
 }
 
 impl MessageKey {
@@ -112,6 +124,18 @@ impl MessageKey {
         MessageKey::InvalidHome,
         MessageKey::UnsupportedOs,
         MessageKey::RenderJsonFailed,
+        MessageKey::ReportUnmanaged,
+        MessageKey::ReportUnmanagedNote,
+        MessageKey::ReportToolTotal,
+        MessageKey::ReportToolTotalNote,
+        MessageKey::ProviderUnavailableNotInstalled,
+        MessageKey::ProviderUnavailableNotRunning,
+        MessageKey::ProviderUnavailableTimeout,
+        MessageKey::ProviderUnavailableCancelled,
+        MessageKey::ProviderUnavailableOutputTooLarge,
+        MessageKey::ProviderUnavailableDenied,
+        MessageKey::ProviderUnavailableParse,
+        MessageKey::ProviderUnavailableIo,
     ];
 
     /// Key as written in the locale file.
@@ -140,8 +164,99 @@ impl MessageKey {
             MessageKey::InvalidHome => "error.invalid-home",
             MessageKey::UnsupportedOs => "error.unsupported-os",
             MessageKey::RenderJsonFailed => "error.render-json",
+            MessageKey::ReportUnmanaged => "report.unmanaged",
+            MessageKey::ReportUnmanagedNote => "report.unmanaged-note",
+            MessageKey::ReportToolTotal => "report.tool-total",
+            MessageKey::ReportToolTotalNote => "report.tool-total-note",
+            MessageKey::ProviderUnavailableNotInstalled => "provider.unavailable.not-installed",
+            MessageKey::ProviderUnavailableNotRunning => "provider.unavailable.not-running",
+            MessageKey::ProviderUnavailableTimeout => "provider.unavailable.timeout",
+            MessageKey::ProviderUnavailableCancelled => "provider.unavailable.cancelled",
+            MessageKey::ProviderUnavailableOutputTooLarge => {
+                "provider.unavailable.output-too-large"
+            }
+            MessageKey::ProviderUnavailableDenied => "provider.unavailable.denied",
+            MessageKey::ProviderUnavailableParse => "provider.unavailable.parse",
+            MessageKey::ProviderUnavailableIo => "provider.unavailable.io",
         }
     }
+}
+
+/// FR-002: ids of every catalogue rule whose name (`rule.<id>`) and
+/// consequence (`rule.<id>.consequence`) must exist in every locale.
+pub const CATALOGUE_RULE_IDS: &[&str] = &[
+    "ai.claude-code.cache",
+    "ai.claude-code.logs",
+    "ai.cursor.cache",
+    "ai.cursor.workspace-storage",
+    "ai.windsurf.cache",
+    "ai.copilot.cache",
+    "ai.codex.cache",
+    "ai.gemini.cache",
+    "ai.aider.cache",
+    "ai.continue.cache",
+    "models.ollama",
+    "models.lmstudio",
+    "models.huggingface",
+    "models.torch-hub",
+    "models.gpt4all",
+    "models.whisper",
+    "containers.build-cache",
+    "containers.dangling-images",
+    "containers.stopped",
+    "containers.unused-images",
+    "containers.volumes",
+    "pkg.npm",
+    "pkg.yarn",
+    "pkg.bun",
+    "pkg.pip",
+    "pkg.uv",
+    "pkg.poetry",
+    "pkg.cargo",
+    "pkg.gradle",
+    "pkg.cocoapods",
+    "pkg.homebrew",
+    "pkg.pnpm",
+    "pkg.conda",
+    "pkg.rustup",
+    "pkg.go",
+    "pkg.maven",
+    "apple.derived-data",
+    "apple.archives",
+    "apple.device-support",
+    "apple.sim-unavailable",
+    "apple.sim-runtimes",
+    "apple.previews",
+    "sys.user-caches",
+    "sys.sensitive-caches",
+    "sys.logs",
+    "sys.crash-reports",
+    "browser.cache",
+    "proj.node-modules",
+    "proj.rust-target",
+    "proj.venv",
+    "proj.build-dist",
+];
+
+/// FR-004: user data reported as unmanaged; each has a name `userdata.<id>`.
+pub const USERDATA_IDS: &[&str] = &[
+    "claude-code.history",
+    "codeium.conversations",
+    "codex.sessions",
+    "aider.chat-history",
+];
+
+/// Every string key the catalogue needs, besides the fixed [`MessageKey`]s.
+pub fn catalogue_keys() -> Vec<String> {
+    let mut keys = Vec::with_capacity(CATALOGUE_RULE_IDS.len() * 2 + USERDATA_IDS.len());
+    for id in CATALOGUE_RULE_IDS {
+        keys.push(format!("rule.{id}"));
+        keys.push(format!("rule.{id}.consequence"));
+    }
+    for id in USERDATA_IDS {
+        keys.push(format!("userdata.{id}"));
+    }
+    keys
 }
 
 /// Failure to load a locale file.
@@ -200,6 +315,15 @@ impl Catalog {
             Text::Simple(s) => s.as_str(),
             Text::Plural { other, .. } => other.as_str(),
         })
+    }
+
+    /// Text for a string key such as a rule's `name_key`; `None` if absent
+    /// or plural.
+    pub fn text(&self, key: &str) -> Option<&str> {
+        match self.texts.get(key) {
+            Some(Text::Simple(s)) => Some(s.as_str()),
+            _ => None,
+        }
     }
 
     /// Text for `key`; falls back to the key itself so a missing entry
@@ -312,7 +436,9 @@ mod tests {
     // FR-013
     #[test]
     fn no_locale_has_unknown_keys() {
-        let known: Vec<&str> = MessageKey::ALL.iter().map(|k| k.as_str()).collect();
+        let extra = catalogue_keys();
+        let mut known: Vec<&str> = MessageKey::ALL.iter().map(|k| k.as_str()).collect();
+        known.extend(extra.iter().map(String::as_str));
         for locale in Locale::ALL {
             let catalog = Catalog::for_locale(*locale).unwrap();
             for key in catalog.texts.keys() {
@@ -402,5 +528,94 @@ mod tests {
         assert!(Catalog::from_json(Locale::En, "[1]").is_err());
         assert!(Catalog::from_json(Locale::En, r#"{"a": 1}"#).is_err());
         assert!(Catalog::from_json(Locale::En, r#"{"a": {"one": "x"}}"#).is_err());
+    }
+
+    fn all_text_forms<'c>(catalog: &'c Catalog, key: &str) -> Vec<&'c str> {
+        match catalog.texts.get(key) {
+            Some(Text::Simple(s)) => vec![s.as_str()],
+            Some(Text::Plural { one, other }) => vec![one.as_str(), other.as_str()],
+            None => vec![],
+        }
+    }
+
+    // FR-002, NFR-003
+    #[test]
+    fn every_key_in_all_locales() {
+        for locale in Locale::ALL {
+            let catalog = Catalog::for_locale(*locale).unwrap();
+            for key in catalogue_keys() {
+                let forms = all_text_forms(&catalog, &key);
+                assert!(
+                    !forms.is_empty() && forms.iter().all(|f| !f.trim().is_empty()),
+                    "missing {} text for {key}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    // FR-002, NFR-003
+    #[test]
+    fn every_builtin_rule_has_name_and_consequence_in_all_locales() {
+        for locale in Locale::ALL {
+            let catalog = Catalog::for_locale(*locale).unwrap();
+            for rule in crate::rules::builtin() {
+                let meta = rule.meta();
+                for key in [meta.name_key, meta.consequence_key] {
+                    assert!(
+                        catalog.text(key).is_some_and(|t| !t.trim().is_empty()),
+                        "missing {} text for {key}",
+                        locale.tag()
+                    );
+                }
+            }
+        }
+    }
+
+    // FR-002
+    #[test]
+    fn catalogue_placeholders_match_across_locales() {
+        let en = Catalog::en().unwrap();
+        for locale in Locale::ALL {
+            let catalog = Catalog::for_locale(*locale).unwrap();
+            for key in catalogue_keys() {
+                let want: Vec<_> = all_text_forms(&en, &key)
+                    .into_iter()
+                    .map(placeholders)
+                    .collect();
+                let got: Vec<_> = all_text_forms(&catalog, &key)
+                    .into_iter()
+                    .map(placeholders)
+                    .collect();
+                assert_eq!(got, want, "{} {key}", locale.tag());
+            }
+        }
+    }
+
+    // FR-002
+    #[test]
+    fn consequence_mentions_size_placeholder() {
+        for locale in Locale::ALL {
+            let catalog = Catalog::for_locale(*locale).unwrap();
+            for id in CATALOGUE_RULE_IDS
+                .iter()
+                .filter(|id| id.starts_with("models."))
+            {
+                let key = format!("rule.{id}.consequence");
+                let text = catalog.text(&key).unwrap_or_default();
+                assert!(
+                    placeholders(text).contains("size"),
+                    "{} {key} lacks {{size}}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    // FR-002
+    #[test]
+    fn catalogue_ids_are_unique() {
+        let set: BTreeSet<_> = CATALOGUE_RULE_IDS.iter().collect();
+        assert_eq!(set.len(), CATALOGUE_RULE_IDS.len());
     }
 }
