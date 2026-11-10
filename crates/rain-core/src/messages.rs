@@ -84,6 +84,7 @@ pub enum MessageKey {
     HelpJson,
     InvalidHome,
     UnsupportedOs,
+    RenderJsonFailed,
 }
 
 impl MessageKey {
@@ -110,6 +111,7 @@ impl MessageKey {
         MessageKey::HelpJson,
         MessageKey::InvalidHome,
         MessageKey::UnsupportedOs,
+        MessageKey::RenderJsonFailed,
     ];
 
     /// Key as written in the locale file.
@@ -137,6 +139,7 @@ impl MessageKey {
             MessageKey::HelpJson => "help.json",
             MessageKey::InvalidHome => "error.invalid-home",
             MessageKey::UnsupportedOs => "error.unsupported-os",
+            MessageKey::RenderJsonFailed => "error.render-json",
         }
     }
 }

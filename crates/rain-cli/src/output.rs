@@ -2,9 +2,6 @@
 //!
 //! Pure functions: no I/O, so the caller decides where the text goes.
 
-// Not called from `main` until the `scan` command is wired (FR-010).
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::io::ErrorKind;
 
 use rain_core::messages::{Catalog, MessageKey};

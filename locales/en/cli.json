@@ -23,5 +23,6 @@
   "help.min-age-days": "Days without changes before a project counts as inactive",
   "help.json": "Print a JSON document instead of a table",
   "error.invalid-home": "Home directory cannot be used: {reason}",
-  "error.unsupported-os": "This operating system is not supported yet."
+  "error.unsupported-os": "This operating system is not supported yet.",
+  "error.render-json": "Could not write the JSON report: {reason}"
 }

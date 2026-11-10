@@ -23,5 +23,6 @@
   "help.min-age-days": "Dias sem alteração para um projeto contar como inativo",
   "help.json": "Imprime um documento JSON em vez de uma tabela",
   "error.invalid-home": "A pasta home não pode ser usada: {reason}",
-  "error.unsupported-os": "Este sistema operacional ainda não é suportado."
+  "error.unsupported-os": "Este sistema operacional ainda não é suportado.",
+  "error.render-json": "Não foi possível gerar o relatório JSON: {reason}"
 }

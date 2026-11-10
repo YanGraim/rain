@@ -23,5 +23,6 @@
   "help.min-age-days": "Días sin cambios para que un proyecto se considere inactivo",
   "help.json": "Imprime un documento JSON en lugar de una tabla",
   "error.invalid-home": "No se puede usar la carpeta de inicio: {reason}",
-  "error.unsupported-os": "Este sistema operativo aún no es compatible."
+  "error.unsupported-os": "Este sistema operativo aún no es compatible.",
+  "error.render-json": "No se pudo generar el informe JSON: {reason}"
 }
