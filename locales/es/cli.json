@@ -3,6 +3,7 @@
   "error.running-as-root": "No se puede ejecutar como root. Ejecuta `rain scan` con tu usuario habitual.",
   "error.unknown-rule": "Regla desconocida: {rule}. Reglas válidas: {valid}",
   "error.invalid-path": "Ruta no válida: {path}",
+  "error.path-outside-home": "La ruta debe estar dentro de tu carpeta personal: {path}",
   "table.header.rule": "Regla",
   "table.header.path": "Ruta",
   "table.header.size": "Tamaño",

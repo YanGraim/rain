@@ -3,6 +3,7 @@
   "error.running-as-root": "Refusing to run as root. Run `rain scan` as your regular user.",
   "error.unknown-rule": "Unknown rule: {rule}. Valid rules: {valid}",
   "error.invalid-path": "Invalid path: {path}",
+  "error.path-outside-home": "The path must be inside your home folder: {path}",
   "table.header.rule": "Rule",
   "table.header.path": "Path",
   "table.header.size": "Size",
