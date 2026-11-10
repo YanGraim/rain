@@ -221,6 +221,7 @@ pub const CATALOGUE_RULE_IDS: &[&str] = &[
     "pkg.rustup",
     "pkg.go",
     "pkg.maven",
+    "pkg.playwright",
     "apple.derived-data",
     "apple.archives",
     "apple.device-support",
@@ -617,5 +618,43 @@ mod tests {
     fn catalogue_ids_are_unique() {
         let set: BTreeSet<_> = CATALOGUE_RULE_IDS.iter().collect();
         assert_eq!(set.len(), CATALOGUE_RULE_IDS.len());
+    }
+
+    // FR-014, FR-043
+    #[test]
+    fn sensitive_caches_consequence_names_what_it_covers() {
+        let en = Catalog::en().unwrap();
+        let text = en
+            .text("rule.sys.sensitive-caches.consequence")
+            .unwrap_or_default();
+        for want in [
+            "Wallet",
+            "Apple Pay",
+            "Apple Account",
+            "App Store",
+            "Family Sharing",
+            "iCloud Mail",
+            "Home",
+        ] {
+            assert!(text.contains(want), "missing {want}");
+        }
+        for lang in Locale::ALL {
+            let catalog = Catalog::for_locale(*lang).unwrap();
+            let text = catalog
+                .text("rule.sys.sensitive-caches.consequence")
+                .unwrap_or_default()
+                .to_lowercase();
+            for banned in [
+                "password",
+                "contraseña",
+                "senha",
+                "security",
+                "seguridad",
+                "segurança",
+                "icloud drive",
+            ] {
+                assert!(!text.contains(banned), "{} mentions {banned}", lang.tag());
+            }
+        }
     }
 }
