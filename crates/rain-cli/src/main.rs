@@ -4,6 +4,7 @@ mod args;
 mod output;
 
 use args::{Command, InvalidPath, ScanArgs};
+use output::escape_for_terminal;
 use rain_core::clock::Clock;
 use rain_core::fs::{Fs, StdFs};
 use rain_core::messages::{Catalog, MessageKey};
@@ -12,7 +13,6 @@ use rain_core::planner::{self, ResolvedRoots, ScanContext, ScanError};
 use rain_core::protect::ProtectList;
 use rain_core::rule::{Rule, RuleContext};
 use rain_core::rules;
-use rain_core::size::format_decimal;
 use rain_platform::{Platform, Root};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -137,14 +137,18 @@ fn select_rules(ids: &[String], catalog: &Catalog) -> Result<Vec<&'static dyn Ru
     })
 }
 
-/// Temporary rendering until the table and JSON output land: prints only
-/// the localized total. `json` is accepted (FR-010) but not rendered yet.
-fn render(report: &ScanReport, _json: bool, catalog: &Catalog) {
-    println!(
-        "{}: {}",
-        catalog.get(MessageKey::TableTotal),
-        format_decimal(report.total_bytes)
-    );
+/// FR-010, FR-014: the JSON document with `--json`, the table otherwise.
+fn report_text(report: &ScanReport, json: bool, catalog: &Catalog) -> Result<String, CliError> {
+    if !json {
+        return Ok(output::render_table(report, catalog));
+    }
+    output::render_json(report).map_err(|e| {
+        CliError::Runtime(
+            catalog
+                .get(MessageKey::RenderJsonFailed)
+                .replace("{reason}", &escape_for_terminal(&e.to_string())),
+        )
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -176,18 +180,20 @@ fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let cwd = std::env::current_dir()?;
-    let result = real_platform(&catalog).and_then(|platform| {
-        let env = Env {
-            platform: platform.as_ref(),
-            fs: &StdFs,
-            clock: &SystemClock,
-            cwd,
-        };
-        run_scan(&scan, &env, &catalog, &AtomicBool::new(false))
-    });
+    let result = real_platform(&catalog)
+        .and_then(|platform| {
+            let env = Env {
+                platform: platform.as_ref(),
+                fs: &StdFs,
+                clock: &SystemClock,
+                cwd,
+            };
+            run_scan(&scan, &env, &catalog, &AtomicBool::new(false))
+        })
+        .and_then(|report| report_text(&report, scan.json, &catalog));
     match result {
-        Ok(report) => {
-            render(&report, scan.json, &catalog);
+        Ok(text) => {
+            print!("{text}");
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
@@ -376,5 +382,31 @@ mod tests {
         let catalog = Catalog::en().unwrap();
         let err = run_scan(&args(&[]), &env, &catalog, &AtomicBool::new(true)).unwrap_err();
         assert_eq!(err.exit_code(), 130);
+    }
+
+    // FR-014: without `--json` the report is the table.
+    #[test]
+    fn default_output_is_table() {
+        let catalog = Catalog::en().unwrap();
+        let report = run(&[]).unwrap();
+        let out = report_text(&report, false, &catalog).unwrap();
+        assert_eq!(out, output::render_table(&report, &catalog));
+    }
+
+    // FR-010: with `--json` the report is the JSON document.
+    #[test]
+    fn json_flag_outputs_json() {
+        let catalog = Catalog::en().unwrap();
+        let report = run(&["--json"]).unwrap();
+        let out = report_text(&report, true, &catalog).unwrap();
+        assert_eq!(out, output::render_json(&report).unwrap());
+    }
+
+    // FR-010, acceptance 7: the same fixture gives byte-identical JSON.
+    #[test]
+    fn json_output_is_deterministic() {
+        let catalog = Catalog::en().unwrap();
+        let once = || report_text(&run(&["--json"]).unwrap(), true, &catalog).unwrap();
+        assert_eq!(once().into_bytes(), once().into_bytes());
     }
 }
