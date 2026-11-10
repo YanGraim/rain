@@ -22,5 +22,6 @@
   "help.path": "Carpeta donde buscar node_modules (se puede repetir; por defecto: carpeta de inicio)",
   "help.min-age-days": "Días sin cambios para que un proyecto se considere inactivo",
   "help.json": "Imprime un documento JSON en lugar de una tabla",
-  "error.invalid-home": "No se puede usar la carpeta de inicio: {reason}"
+  "error.invalid-home": "No se puede usar la carpeta de inicio: {reason}",
+  "error.unsupported-os": "Este sistema operativo aún no es compatible."
 }

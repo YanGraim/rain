@@ -13,7 +13,7 @@ use rain_core::protect::ProtectList;
 use rain_core::rule::{Rule, RuleContext};
 use rain_core::rules;
 use rain_core::size::format_decimal;
-use rain_platform::{MacPlatform, Platform, Root};
+use rain_platform::{Platform, Root};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -147,6 +147,19 @@ fn render(report: &ScanReport, _json: bool, catalog: &Catalog) {
     );
 }
 
+#[cfg(target_os = "macos")]
+fn real_platform(_catalog: &Catalog) -> Result<Box<dyn Platform>, CliError> {
+    Ok(Box::new(rain_platform::MacPlatform::from_env()))
+}
+
+/// FR-015: only macOS has an adapter; elsewhere the scan refuses with 1.
+#[cfg(not(target_os = "macos"))]
+fn real_platform(catalog: &Catalog) -> Result<Box<dyn Platform>, CliError> {
+    Err(CliError::Runtime(
+        catalog.get(MessageKey::UnsupportedOs).to_owned(),
+    ))
+}
+
 fn main() -> anyhow::Result<ExitCode> {
     let catalog = Catalog::en()?;
     let cli = match args::parse(&catalog, std::env::args_os()) {
@@ -162,14 +175,17 @@ fn main() -> anyhow::Result<ExitCode> {
         print!("{}", args::help(&catalog));
         return Ok(ExitCode::SUCCESS);
     };
-    let platform = MacPlatform::from_env();
-    let env = Env {
-        platform: &platform,
-        fs: &StdFs,
-        clock: &SystemClock,
-        cwd: std::env::current_dir()?,
-    };
-    match run_scan(&scan, &env, &catalog, &AtomicBool::new(false)) {
+    let cwd = std::env::current_dir()?;
+    let result = real_platform(&catalog).and_then(|platform| {
+        let env = Env {
+            platform: platform.as_ref(),
+            fs: &StdFs,
+            clock: &SystemClock,
+            cwd,
+        };
+        run_scan(&scan, &env, &catalog, &AtomicBool::new(false))
+    });
+    match result {
         Ok(report) => {
             render(&report, scan.json, &catalog);
             Ok(ExitCode::SUCCESS)
