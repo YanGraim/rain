@@ -623,27 +623,53 @@ mod tests {
     // FR-014, FR-043
     #[test]
     fn sensitive_caches_consequence_names_what_it_covers() {
-        let en = Catalog::en().unwrap();
-        let text = en
-            .text("rule.sys.sensitive-caches.consequence")
-            .unwrap_or_default();
-        for want in [
-            "Wallet",
-            "Apple Pay",
-            "Apple Account",
-            "App Store",
-            "Family Sharing",
-            "iCloud Mail",
-            "Home",
-        ] {
-            assert!(text.contains(want), "missing {want}");
-        }
-        for lang in Locale::ALL {
-            let catalog = Catalog::for_locale(*lang).unwrap();
+        let cases: [(Locale, &[&str]); 3] = [
+            (
+                Locale::En,
+                &[
+                    "Wallet",
+                    "Apple Pay",
+                    "Apple Account",
+                    "App Store",
+                    "Family Sharing",
+                    "iCloud Mail",
+                    "Home",
+                ],
+            ),
+            (
+                Locale::Es,
+                &[
+                    "Wallet",
+                    "Apple Pay",
+                    "cuenta de Apple",
+                    "App Store",
+                    "En familia",
+                    "Mail de iCloud",
+                    "Casa",
+                ],
+            ),
+            (
+                Locale::PtBr,
+                &[
+                    "Wallet",
+                    "Apple Pay",
+                    "conta Apple",
+                    "App Store",
+                    "Compartilhamento Familiar",
+                    "Mail do iCloud",
+                    "Casa",
+                ],
+            ),
+        ];
+        for (locale, wants) in cases {
+            let catalog = Catalog::for_locale(locale).unwrap();
             let text = catalog
                 .text("rule.sys.sensitive-caches.consequence")
-                .unwrap_or_default()
-                .to_lowercase();
+                .unwrap_or_default();
+            for want in wants {
+                assert!(text.contains(want), "{} missing {want}", locale.tag());
+            }
+            let lower = text.to_lowercase();
             for banned in [
                 "password",
                 "contraseña",
@@ -653,8 +679,23 @@ mod tests {
                 "segurança",
                 "icloud drive",
             ] {
-                assert!(!text.contains(banned), "{} mentions {banned}", lang.tag());
+                assert!(
+                    !lower.contains(banned),
+                    "{} mentions {banned}",
+                    locale.tag()
+                );
             }
         }
+    }
+
+    // FR-002
+    #[test]
+    fn playwright_consequence_mentions_next_install_and_size() {
+        let en = Catalog::en().unwrap();
+        let text = en
+            .text("rule.pkg.playwright.consequence")
+            .unwrap_or_default();
+        assert!(placeholders(text).contains("size"), "lacks {{size}}");
+        assert!(text.contains("next install"), "lacks next install");
     }
 }

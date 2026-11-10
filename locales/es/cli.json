@@ -97,7 +97,7 @@
   "rule.pkg.maven": "Repositorio de Maven",
   "rule.pkg.maven.consequence": "Todas las dependencias de Maven se volverán a descargar, lo que puede tardar mucho.",
   "rule.pkg.playwright": "Navegadores de Playwright",
-  "rule.pkg.playwright.consequence": "Los navegadores de prueba de Playwright se volverán a descargar; hasta entonces, las pruebas end-to-end no funcionarán sin conexión.",
+  "rule.pkg.playwright.consequence": "Los navegadores de prueba de Playwright se volverán a descargar en la próxima instalación (unos {size}). Hasta entonces, las pruebas de extremo a extremo no funcionarán sin conexión.",
   "rule.apple.derived-data.consequence": "Xcode recompila los proyectos desde cero, así que la próxima compilación será más lenta. Cierra Xcode antes.",
   "rule.apple.archives": "Archivos de Xcode",
   "rule.apple.archives.consequence": "Ya no podrás simbolizar informes de fallos ni volver a enviar esas compilaciones publicadas.",
