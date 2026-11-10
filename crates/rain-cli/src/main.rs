@@ -302,7 +302,7 @@ mod tests {
     // FR-008, FR-012: an unknown rule is a usage error naming every rule.
     #[test]
     fn unknown_rule_exits_2_and_lists_rules() {
-        let err = run(&["--rule", "macos.user.logs", "--rule", "nope"]).unwrap_err();
+        let err = run(&["--rule", "sys.logs", "--rule", "nope"]).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         let CliError::Usage(msg) = err else {
             panic!("not a usage error: {err:?}");
@@ -330,7 +330,7 @@ mod tests {
     // nothing below it is listed, and the scan still succeeds.
     #[test]
     fn protected_path_arg_is_skipped() {
-        let report = run(&["--rule", "dev.node-modules", "--path", ".ssh"]).unwrap();
+        let report = run(&["--rule", "proj.node-modules", "--path", ".ssh"]).unwrap();
         assert!(report.items.is_empty(), "{:?}", report.items);
         assert_eq!(
             report.skipped,
@@ -345,9 +345,9 @@ mod tests {
     // FR-008: only the named rules run.
     #[test]
     fn rule_filter_limits_report() {
-        let report = run(&["--rule", "macos.user.logs"]).unwrap();
+        let report = run(&["--rule", "sys.logs"]).unwrap();
         let ids: Vec<_> = report.rules.iter().map(|r| r.rule.as_str()).collect();
-        assert_eq!(ids, ["macos.user.logs"]);
+        assert_eq!(ids, ["sys.logs"]);
         assert_eq!(report.total_bytes, 2 * 512);
     }
 
@@ -464,7 +464,7 @@ mod tests {
             // `link/keys` as the directory; FakeFs only does exact lookups.
             .insert(h("link/keys"), meta(true, 13, 0));
         let report = run_with(
-            &["--rule", "dev.node-modules", "--path", "link/keys"],
+            &["--rule", "proj.node-modules", "--path", "link/keys"],
             &fs,
             &platform(Some(HOME)),
         )
