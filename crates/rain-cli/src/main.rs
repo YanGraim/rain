@@ -79,7 +79,7 @@ fn run_scan(
             CliError::Usage(
                 catalog
                     .get(MessageKey::InvalidPath)
-                    .replace("{path}", &path.display().to_string()),
+                    .replace("{path}", &escape_for_terminal(&path.display().to_string())),
             )
         })?;
 
@@ -87,7 +87,7 @@ fn run_scan(
         CliError::Runtime(
             catalog
                 .get(MessageKey::InvalidHome)
-                .replace("{reason}", &reason),
+                .replace("{reason}", &escape_for_terminal(&reason)),
         )
     };
     let resolve = |root| {
@@ -131,8 +131,8 @@ fn select_rules(ids: &[String], catalog: &Catalog) -> Result<Vec<&'static dyn Ru
         CliError::Usage(
             catalog
                 .get(MessageKey::UnknownRule)
-                .replace("{rule}", &e.id)
-                .replace("{valid}", &valid.join(", ")),
+                .replace("{rule}", &escape_for_terminal(&e.id))
+                .replace("{valid}", &escape_for_terminal(&valid.join(", "))),
         )
     })
 }
@@ -149,6 +149,15 @@ fn report_text(report: &ScanReport, json: bool, catalog: &Catalog) -> Result<Str
                 .replace("{reason}", &escape_for_terminal(&e.to_string())),
         )
     })
+}
+
+/// The text written to stderr for `e`. Anything taken from the command
+/// line or the disk was escaped when the error was built (FR-010).
+fn error_message(e: &CliError, catalog: &Catalog) -> String {
+    match e {
+        CliError::Usage(msg) | CliError::Runtime(msg) => msg.clone(),
+        CliError::Cancelled => catalog.get(MessageKey::ScanCancelled).to_string(),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -197,10 +206,7 @@ fn main() -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
-            match &e {
-                CliError::Usage(msg) | CliError::Runtime(msg) => eprintln!("{msg}"),
-                CliError::Cancelled => eprintln!("{}", catalog.get(MessageKey::ScanCancelled)),
-            }
+            eprintln!("{}", error_message(&e, &catalog));
             Ok(ExitCode::from(e.exit_code()))
         }
     }
@@ -382,6 +388,43 @@ mod tests {
         let catalog = Catalog::en().unwrap();
         let err = run_scan(&args(&[]), &env, &catalog, &AtomicBool::new(true)).unwrap_err();
         assert_eq!(err.exit_code(), 130);
+    }
+
+    /// Control, bidi and OSC 52 payloads an attacker could put in a name.
+    const NASTY: &str = "a\x1b[2Kb\rc\nd\x1b]52;c;cHduZWQ=\x07e\u{202e}f";
+
+    fn assert_no_raw_controls(msg: &str) {
+        for bad in ['\x1b', '\r', '\n', '\x07', '\u{202e}'] {
+            assert!(!msg.contains(bad), "raw {:?} in {msg:?}", bad);
+        }
+    }
+
+    // FR-010, FR-012: a hostile `--path` is escaped in the stderr message.
+    #[test]
+    fn invalid_path_message_is_escaped() {
+        let err = run(&["--path", NASTY]).unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        let msg = error_message(&err, &Catalog::en().unwrap());
+        assert_no_raw_controls(&msg);
+        assert!(msg.contains("\\x1b[2K"), "{msg}");
+    }
+
+    // FR-010, FR-012: a hostile home path is escaped in the stderr message.
+    #[test]
+    fn invalid_home_message_is_escaped() {
+        let err = run_with(&[], &home_fs(), &platform(Some(NASTY))).unwrap_err();
+        assert_eq!(err.exit_code(), 1);
+        let msg = error_message(&err, &Catalog::en().unwrap());
+        assert_no_raw_controls(&msg);
+        assert!(msg.contains("\\u{202e}"), "{msg}");
+    }
+
+    // FR-008, FR-010: a hostile `--rule` is escaped in the stderr message.
+    #[test]
+    fn unknown_rule_message_is_escaped() {
+        let err = run(&["--rule", NASTY]).unwrap_err();
+        let msg = error_message(&err, &Catalog::en().unwrap());
+        assert_no_raw_controls(&msg);
     }
 
     // FR-014: without `--json` the report is the table.
