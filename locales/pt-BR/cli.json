@@ -22,7 +22,14 @@
   "help.path": "Pasta onde procurar node_modules (pode repetir; padrão: home)",
   "help.min-age-days": "Dias sem alteração para um projeto contar como inativo",
   "help.json": "Imprime um documento JSON em vez de uma tabela",
-  "error.invalid-home": "A pasta home não pode ser usada: {reason}",
+  "error.home.missing": "A pasta home não está definida (HOME ausente).",
+  "error.home.empty": "A pasta home está vazia (HOME tem valor vazio).",
+  "error.home.not-absolute": "A pasta home não é um caminho absoluto: {path}",
+  "error.home.not-found": "A pasta home não existe: {path}",
+  "error.home.not-a-directory": "A pasta home não é uma pasta: {path}",
+  "error.home.not-accessible": "Não é possível acessar a pasta home: {path}",
+  "error.protect-list": "A lista de proteção embutida é inválida: {reason}",
+  "error.home.filesystem-root": "A pasta home é a raiz do sistema de arquivos; o disco inteiro não será escaneado: {path}",
   "error.unsupported-os": "Este sistema operacional ainda não é suportado.",
   "error.render-json": "Não foi possível gerar o relatório JSON: {reason}"
 }

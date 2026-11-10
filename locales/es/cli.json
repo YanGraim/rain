@@ -22,7 +22,14 @@
   "help.path": "Carpeta donde buscar node_modules (se puede repetir; por defecto: carpeta de inicio)",
   "help.min-age-days": "Días sin cambios para que un proyecto se considere inactivo",
   "help.json": "Imprime un documento JSON en lugar de una tabla",
-  "error.invalid-home": "No se puede usar la carpeta de inicio: {reason}",
+  "error.home.missing": "La carpeta de inicio no está definida (falta HOME).",
+  "error.home.empty": "La carpeta de inicio está vacía (HOME tiene un valor vacío).",
+  "error.home.not-absolute": "La carpeta de inicio no es una ruta absoluta: {path}",
+  "error.home.not-found": "La carpeta de inicio no existe: {path}",
+  "error.home.not-a-directory": "La carpeta de inicio no es una carpeta: {path}",
+  "error.home.not-accessible": "No se puede acceder a la carpeta de inicio: {path}",
+  "error.protect-list": "La lista de protección integrada no es válida: {reason}",
+  "error.home.filesystem-root": "La carpeta de inicio es la raíz del sistema de archivos; no se escaneará todo el disco: {path}",
   "error.unsupported-os": "Este sistema operativo aún no es compatible.",
   "error.render-json": "No se pudo generar el informe JSON: {reason}"
 }
