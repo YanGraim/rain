@@ -128,8 +128,9 @@ mod fake {
         }
     }
 
-    /// In-memory filesystem for tests. `symlink_metadata` and `read_dir` use
-    /// exact lookups and never follow symlinks; `canonicalize` resolves
+    /// In-memory filesystem for tests. `symlink_metadata` and `read_dir`
+    /// never follow a symlink in the last component but, like the real
+    /// filesystem, follow symlinked parent directories; `canonicalize` resolves
     /// symlinks, `.` and `..` like `realpath`. Every directory must be
     /// inserted explicitly, except the root, which always exists. Errors can be injected per
     /// path to simulate `EACCES`/`EPERM`.
@@ -216,14 +217,32 @@ mod fake {
 
     impl FakeFs {
         fn lookup(&self, p: &Path) -> io::Result<&Metadata> {
+            self.locate(p).map(|(_, m)| m)
+        }
+
+        /// Where `p` really lives and its metadata. Like `lstat`, only the
+        /// last component is taken literally: symlinked parents are followed.
+        fn locate(&self, p: &Path) -> io::Result<(PathBuf, &Metadata)> {
             if let Some(kind) = self.errors.get(p) {
                 return Err((*kind).into());
             }
             match self.entries.get(p) {
-                Some(m) => Ok(m),
-                None if is_root(p) => Ok(&ROOT_META),
-                None => Err(io::ErrorKind::NotFound.into()),
+                Some(m) => return Ok((p.to_path_buf(), m)),
+                None if is_root(p) => return Ok((p.to_path_buf(), &ROOT_META)),
+                None => {}
             }
+            let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else {
+                return Err(io::ErrorKind::NotFound.into());
+            };
+            let real_parent = self.resolve_as(parent, Realpath::HOST)?;
+            if !self.lookup(&real_parent)?.is_dir {
+                return Err(io::ErrorKind::NotADirectory.into());
+            }
+            let real = real_parent.join(name);
+            if real == p {
+                return Err(io::ErrorKind::NotFound.into());
+            }
+            self.locate(&real)
         }
 
         fn node(&self, p: &Path) -> io::Result<Node<'_>> {
@@ -338,15 +357,17 @@ mod fake {
         }
 
         fn read_dir(&self, p: &Path) -> io::Result<Vec<DirEntryInfo>> {
-            if !self.lookup(p)?.is_dir {
+            let (real, meta) = self.locate(p)?;
+            if !meta.is_dir {
                 return Err(io::ErrorKind::NotADirectory.into());
             }
             // BTreeMap iteration is ordered, so children come out sorted.
             Ok(self
                 .entries
                 .keys()
-                .filter(|k| k.parent() == Some(p))
-                .map(|k| DirEntryInfo { path: k.clone() })
+                .filter(|k| k.parent() == Some(real.as_path()))
+                .filter_map(|k| k.file_name())
+                .map(|name| DirEntryInfo { path: p.join(name) })
                 .collect())
         }
 
@@ -767,6 +788,76 @@ mod real_fs_tests {
             real_escape
         );
         assert_eq!(fake.canonicalize(&root.join("abs")).unwrap(), real_abs);
+    }
+
+    type Observed = (
+        Result<(bool, bool), io::ErrorKind>,
+        Result<Vec<PathBuf>, io::ErrorKind>,
+    );
+
+    /// Outcome of `symlink_metadata` and `read_dir` reduced to what both
+    /// filesystems can be compared on.
+    fn observe(fs: &dyn Fs, p: &Path) -> Observed {
+        let meta = fs
+            .symlink_metadata(p)
+            .map(|m| (m.is_dir, m.is_symlink))
+            .map_err(|e| e.kind());
+        let list = fs
+            .read_dir(p)
+            .map(|v| {
+                let mut v: Vec<_> = v.into_iter().map(|e| e.path).collect();
+                v.sort();
+                v
+            })
+            .map_err(|e| e.kind());
+        (meta, list)
+    }
+
+    // NFR-005, FR-004: a symlinked parent directory is followed by
+    // `symlink_metadata` and `read_dir` (only the last component is not),
+    // exactly as the real filesystem does.
+    #[test]
+    fn symlinked_ancestors_match_real_fs() {
+        let (_tmp, root, mut fake) = sandbox();
+        mkdir(&mut fake, root.join("real"));
+        mkdir(&mut fake, root.join("real/sub"));
+        mkfile(&mut fake, root.join("real/sub/f"));
+        mkfile(&mut fake, root.join("file"));
+        mklink(&mut fake, root.join("real/sub/inner"), "../../real");
+        mklink(&mut fake, root.join("rel"), "real");
+        mklink(
+            &mut fake,
+            root.join("abs"),
+            root.join("real").to_str().unwrap(),
+        );
+        mklink(&mut fake, root.join("chain"), "rel/sub");
+        mklink(&mut fake, root.join("dangling"), "missing");
+        mklink(&mut fake, root.join("loop"), "loop");
+
+        for rel in [
+            "rel",
+            "rel/sub",
+            "rel/sub/f",
+            "rel/sub/inner",
+            "rel/sub/inner/sub/f",
+            "abs/sub",
+            "abs/sub/f",
+            "chain",
+            "chain/f",
+            "chain/missing",
+            "dangling/x",
+            "loop/x",
+            "file/x",
+            "rel/../file",
+        ] {
+            let p = root.join(rel);
+            let (real_meta, real_list) = observe(&StdFs, &p);
+            let (fake_meta, fake_list) = observe(&fake, &p);
+            assert_eq!(fake_meta, real_meta, "{rel}");
+            if !matches!(real_meta, Ok((_, true))) {
+                assert_eq!(fake_list, real_list, "{rel}");
+            }
+        }
     }
 
     // FR-004, FR-007: dangling links and loops fail the same way on both.
