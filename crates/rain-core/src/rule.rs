@@ -16,6 +16,12 @@ pub struct RuleMeta {
     pub risk: Risk,
     /// Message catalogue key of the display name.
     pub name_key: &'static str,
+    /// FR-002: message key of what the user loses when the item goes.
+    pub consequence_key: &'static str,
+    /// FR-014: never `true` for `Risk::High`.
+    pub default_selected: bool,
+    /// FR-015: bundle id of the app that must not be running.
+    pub requires_app_closed: Option<&'static str>,
     pub os: &'static [Os],
 }
 

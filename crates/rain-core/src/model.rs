@@ -38,7 +38,10 @@ pub enum Category {
     PackageManagers,
     Browsers,
     AiTools,
+    AiModels,
     Containers,
+    AppleDev,
+    Projects,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

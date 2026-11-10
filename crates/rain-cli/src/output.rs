@@ -197,7 +197,10 @@ fn category_str(c: Category) -> &'static str {
         Category::PackageManagers => "package-managers",
         Category::Browsers => "browsers",
         Category::AiTools => "ai-tools",
+        Category::AiModels => "ai-models",
         Category::Containers => "containers",
+        Category::AppleDev => "apple-dev",
+        Category::Projects => "projects",
     }
 }
 
