@@ -130,7 +130,9 @@ mod fake {
 
     /// In-memory filesystem for tests. `symlink_metadata` and `read_dir`
     /// never follow a symlink in the last component but, like the real
-    /// filesystem, follow symlinked parent directories; `canonicalize` resolves
+    /// filesystem, follow symlinked parent directories. `read_dir` on a
+    /// symlink returns `NotADirectory`, where a real OS lists the target:
+    /// the one deliberate, fail-closed difference. `canonicalize` resolves
     /// symlinks, `.` and `..` like `realpath`. Every directory must be
     /// inserted explicitly, except the root, which always exists. Errors can be injected per
     /// path to simulate `EACCES`/`EPERM`.
