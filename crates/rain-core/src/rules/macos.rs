@@ -10,9 +10,12 @@ use rain_platform::{Os, Root};
 pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
         id: RuleId::new("apple.derived-data"),
-        category: Category::DevArtifacts,
+        category: Category::AppleDev,
         risk: Risk::Low,
         name_key: "rule.apple.derived-data",
+        consequence_key: "rule.apple.derived-data.consequence",
+        default_selected: true,
+        requires_app_closed: Some("com.apple.dt.Xcode"),
         os: &[Os::Macos],
     },
     root: Root::Home,
@@ -27,6 +30,9 @@ pub static HOMEBREW_CACHE: ChildrenOf = ChildrenOf {
         category: Category::PackageManagers,
         risk: Risk::Low,
         name_key: "rule.pkg.homebrew",
+        consequence_key: "rule.pkg.homebrew.consequence",
+        default_selected: true,
+        requires_app_closed: None,
         os: &[Os::Macos],
     },
     root: Root::Caches,

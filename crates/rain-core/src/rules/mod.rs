@@ -93,6 +93,9 @@ mod tests {
             category: Category::SystemCaches,
             risk: Risk::Low,
             name_key: "rule.test",
+            consequence_key: "rule.test.consequence",
+            default_selected: true,
+            requires_app_closed: None,
             os: &[],
         })
     }
@@ -152,6 +155,68 @@ mod tests {
         all.sort_unstable();
         all.dedup();
         assert_eq!(all.len(), n);
+    }
+
+    // FR-014
+    #[test]
+    fn high_rules_are_never_default_selected() {
+        for rule in builtin() {
+            let meta = rule.meta();
+            assert!(
+                !(meta.risk == Risk::High && meta.default_selected),
+                "{} is high and default selected",
+                meta.id
+            );
+        }
+    }
+
+    // FR-001
+    #[test]
+    fn rules_from_scan_macos_are_default_selected() {
+        for rule in builtin() {
+            assert!(rule.meta().default_selected, "{}", rule.meta().id);
+        }
+    }
+
+    // FR-015
+    #[test]
+    fn derived_data_requires_xcode_closed() {
+        let pick = select(&["apple.derived-data"]).unwrap();
+        assert_eq!(
+            pick[0].meta().requires_app_closed,
+            Some("com.apple.dt.Xcode")
+        );
+        let others = builtin()
+            .iter()
+            .filter(|r| r.meta().id.as_str() != "apple.derived-data");
+        for rule in others {
+            assert_eq!(rule.meta().requires_app_closed, None, "{}", rule.meta().id);
+        }
+    }
+
+    // FR-002
+    #[test]
+    fn every_rule_has_consequence_key() {
+        for rule in builtin() {
+            let meta = rule.meta();
+            assert_eq!(
+                meta.consequence_key,
+                format!("rule.{}.consequence", meta.id),
+                "{}",
+                meta.id
+            );
+        }
+    }
+
+    // FR-001
+    #[test]
+    fn rules_from_scan_macos_use_their_catalogue_category() {
+        let category = |id: &str| select(&[id]).unwrap()[0].meta().category;
+        assert_eq!(category("apple.derived-data"), Category::AppleDev);
+        assert_eq!(category("proj.node-modules"), Category::Projects);
+        assert_eq!(category("pkg.homebrew"), Category::PackageManagers);
+        assert_eq!(category("sys.user-caches"), Category::SystemCaches);
+        assert_eq!(category("sys.logs"), Category::Logs);
     }
 
     // FR-002 / ADR 0005: the registry order is homebrew, xcode, logs, caches.
