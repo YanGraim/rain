@@ -126,7 +126,7 @@ mod tests {
     fn builtin_starts_with_homebrew_then_xcode() {
         assert_eq!(
             ids(builtin()).get(..2),
-            Some(&["macos.homebrew.cache", "macos.xcode.derived-data"][..])
+            Some(&["pkg.homebrew", "apple.derived-data"][..])
         );
     }
 
@@ -160,11 +160,11 @@ mod tests {
         assert_eq!(
             ids(builtin()),
             [
-                "macos.homebrew.cache",
-                "macos.xcode.derived-data",
-                "macos.user.logs",
-                "macos.user.caches",
-                "dev.node-modules",
+                "pkg.homebrew",
+                "apple.derived-data",
+                "sys.logs",
+                "sys.user-caches",
+                "proj.node-modules",
             ]
         );
     }

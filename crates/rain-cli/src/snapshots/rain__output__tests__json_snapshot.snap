@@ -1,36 +1,36 @@
 ---
 source: crates/rain-cli/src/output.rs
-expression: render_json(&full_report())
+expression: render_json(&full_report()).unwrap()
 ---
 {
   "items": [
     {
       "allocated_bytes": 1200000000,
       "file_count": 3,
-      "id": "a5ec3b3673b68f68",
+      "id": "1805bb2fe3d459f9",
       "path": "/Users/u/Library/Caches/com.a",
-      "rule": "macos.user.caches"
+      "rule": "sys.user-caches"
     },
     {
       "allocated_bytes": 4096,
       "file_count": 1,
-      "id": "a5ec3e3673b69481",
+      "id": "1805b82fe3d454e0",
       "path": "/Users/u/Library/Caches/com.b",
-      "rule": "macos.user.caches"
+      "rule": "sys.user-caches"
     }
   ],
   "rules": [
     {
       "allocated_bytes": 1200004096,
       "category": "system-caches",
-      "id": "macos.user.caches",
+      "id": "sys.user-caches",
       "items": 2,
       "risk": "low"
     },
     {
       "allocated_bytes": 0,
       "category": "logs",
-      "id": "macos.user.logs",
+      "id": "sys.logs",
       "items": 0,
       "risk": "low"
     }

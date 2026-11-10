@@ -5,28 +5,28 @@ use crate::model::{Category, Risk, RuleId};
 use crate::rule::RuleMeta;
 use rain_platform::{Os, Root};
 
-// FR-002: no age filter on these rules; the spec only ages `dev.node-modules`.
+// FR-002: no age filter on these rules; the spec only ages `proj.node-modules`.
 
-/// `macos.user.caches`: contents of `~/Library/Caches`.
+/// `sys.user-caches`: contents of `~/Library/Caches`.
 pub static USER_CACHES: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
-        id: RuleId::new("macos.user.caches"),
+        id: RuleId::new("sys.user-caches"),
         category: Category::SystemCaches,
         risk: Risk::Low,
-        name_key: "rule.macos.user.caches",
+        name_key: "rule.sys.user-caches",
         os: &[Os::Macos],
     },
     root: Root::Caches,
     rel: "",
 };
 
-/// `macos.user.logs`: contents of `~/Library/Logs`.
+/// `sys.logs`: contents of `~/Library/Logs`.
 pub static USER_LOGS: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
-        id: RuleId::new("macos.user.logs"),
+        id: RuleId::new("sys.logs"),
         category: Category::Logs,
         risk: Risk::Low,
-        name_key: "rule.macos.user.logs",
+        name_key: "rule.sys.logs",
         os: &[Os::Macos],
     },
     root: Root::Logs,
@@ -190,14 +190,14 @@ mod tests {
     fn caches_and_logs_report_snapshot() {
         let report = run(&fixture(), &[&USER_LOGS, &USER_CACHES]);
         let expected = "\
-rule macos.user.caches SystemCaches Low items=4 bytes=31744
-rule macos.user.logs Logs Low items=2 bytes=8192
-item macos.user.caches /Users/Tester/Library/Caches/a.db bytes=4096 files=1
-item macos.user.caches /Users/Tester/Library/Caches/b.bin bytes=8192 files=1
-item macos.user.caches /Users/Tester/Library/Caches/c.tmp bytes=2048 files=1
-item macos.user.caches /Users/Tester/Library/Caches/com.example.app bytes=17408 files=2
-item macos.user.logs /Users/Tester/Library/Logs/DiagnosticReports bytes=5120 files=1
-item macos.user.logs /Users/Tester/Library/Logs/app.log bytes=3072 files=1
+rule sys.logs Logs Low items=2 bytes=8192
+rule sys.user-caches SystemCaches Low items=4 bytes=31744
+item sys.logs /Users/Tester/Library/Logs/DiagnosticReports bytes=5120 files=1
+item sys.logs /Users/Tester/Library/Logs/app.log bytes=3072 files=1
+item sys.user-caches /Users/Tester/Library/Caches/a.db bytes=4096 files=1
+item sys.user-caches /Users/Tester/Library/Caches/b.bin bytes=8192 files=1
+item sys.user-caches /Users/Tester/Library/Caches/c.tmp bytes=2048 files=1
+item sys.user-caches /Users/Tester/Library/Caches/com.example.app bytes=17408 files=2
 skip /Users/Tester/Library/Caches/link Symlink
 total 39936
 ";
@@ -217,7 +217,7 @@ total 39936
         assert!(report.skipped.is_empty());
     }
 
-    // FR-008: `--rule macos.user.logs` alone reports only Logs.
+    // FR-008: `--rule sys.logs` alone reports only Logs.
     #[test]
     fn logs_alone_ignore_caches() {
         let report = run(&fixture(), &[&USER_LOGS]);
@@ -287,14 +287,14 @@ total 39936
             user_paths: Vec::new(),
             now: SystemTime::UNIX_EPOCH,
         };
-        assert_eq!(USER_CACHES.meta().id.as_str(), "macos.user.caches");
+        assert_eq!(USER_CACHES.meta().id.as_str(), "sys.user-caches");
         assert_eq!(USER_CACHES.meta().risk, Risk::Low);
         assert_eq!(USER_CACHES.meta().os, &[Os::Macos]);
         assert_eq!(
             USER_CACHES.roots(&ctx),
             vec![RootedPath::Under(Root::Caches, "")]
         );
-        assert_eq!(USER_LOGS.meta().id.as_str(), "macos.user.logs");
+        assert_eq!(USER_LOGS.meta().id.as_str(), "sys.logs");
         assert_eq!(USER_LOGS.meta().risk, Risk::Low);
         assert_eq!(USER_LOGS.meta().category, Category::Logs);
         assert_eq!(
@@ -322,13 +322,9 @@ total 39936
         assert_eq!(
             owners,
             vec![
-                (
-                    "macos.homebrew.cache",
-                    c("Homebrew/bottle.tar.gz"),
-                    64 * 512
-                ),
-                ("macos.user.caches", c("Homebrew"), 8 * 512),
-                ("macos.user.caches", c("other"), 16 * 512),
+                ("pkg.homebrew", c("Homebrew/bottle.tar.gz"), 64 * 512),
+                ("sys.user-caches", c("Homebrew"), 8 * 512),
+                ("sys.user-caches", c("other"), 16 * 512),
             ]
         );
         assert_eq!(report.total_bytes, (64 + 8 + 16) * 512);
