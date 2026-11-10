@@ -52,6 +52,13 @@
 ~/Library/Caches/com.apple.bird
 ~/Library/Caches/docker-secrets-engine
 
+# Container engines: VM disks and data, cleaned only by the engine itself.
+~/Library/Containers/com.docker.docker
+~/Library/Group Containers/group.com.docker
+~/.orbstack
+~/.colima
+~/.local/share/containers
+
 # Password managers and wallets.
 ~/Library/Application Support/1Password
 ~/Library/Application Support/Bitwarden
