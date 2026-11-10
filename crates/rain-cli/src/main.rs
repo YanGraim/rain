@@ -3,7 +3,7 @@
 mod args;
 mod output;
 
-use args::{Command, InvalidPath, ScanArgs};
+use args::{Command, InvalidPath, OutsideHome, ScanArgs};
 use output::escape_for_terminal;
 use rain_core::clock::Clock;
 use rain_core::fs::{Fs, StdFs};
@@ -101,6 +101,15 @@ fn run_scan(
         caches: resolve(Root::Caches)?,
         logs: resolve(Root::Logs)?,
     };
+    args::ensure_inside_home(env.fs, &roots.home, &args.paths, &user_paths).map_err(
+        |OutsideHome(path)| {
+            CliError::Usage(
+                catalog
+                    .get(MessageKey::PathOutsideHome)
+                    .replace("{path}", &escape_for_terminal(&path.display().to_string())),
+            )
+        },
+    )?;
     let protect = ProtectList::builtin(env.platform)
         .map_err(|e| CliError::Runtime(protect_error_message(&e, catalog)))?
         .with_identities(env.fs);
@@ -373,6 +382,91 @@ mod tests {
             };
             assert!(msg.contains(bad), "{msg}");
         }
+    }
+
+    fn outside_home_fs() -> FakeFs {
+        let mut fs = home_fs();
+        fs.insert("/Users/other", meta(true, 20, 0))
+            .insert("/Users/other/sub", meta(true, 21, 0))
+            .insert("/Volumes", meta(true, 22, 0))
+            .insert("/Volumes/x", meta(true, 23, 0))
+            .insert_symlink(h("out"), "/Users/other")
+            // `lstat` follows symlinks in ancestors; FakeFs only does exact lookups.
+            .insert(h("out/sub"), meta(true, 21, 0))
+            .insert(h("../other"), meta(true, 20, 0));
+        fs
+    }
+
+    fn assert_outside_home(path: &str) {
+        let err =
+            run_with(&["--path", path], &outside_home_fs(), &platform(Some(HOME))).unwrap_err();
+        assert_eq!(err.exit_code(), 2, "{path}");
+        let catalog = Catalog::en().unwrap();
+        let expected = catalog
+            .get(MessageKey::PathOutsideHome)
+            .replace("{path}", &escape_for_terminal(path));
+        assert_eq!(error_message(&err, &catalog), expected, "{path}");
+    }
+
+    // FR-009, FR-012
+    #[test]
+    fn path_root_exits_2() {
+        assert_outside_home("/");
+    }
+
+    // FR-009, FR-012
+    #[test]
+    fn path_volumes_exits_2() {
+        assert_outside_home("/Volumes/x");
+    }
+
+    // FR-009, FR-012
+    #[test]
+    fn path_other_user_home_exits_2() {
+        assert_outside_home("/Users/other");
+    }
+
+    // FR-009, FR-012
+    #[test]
+    fn path_dotdot_escape_exits_2() {
+        assert_outside_home("../other");
+    }
+
+    // FR-007, FR-009
+    #[test]
+    fn path_symlink_to_outside_home_exits_2() {
+        assert_outside_home("out/sub");
+    }
+
+    // FR-009
+    #[test]
+    fn path_inside_home_ok() {
+        for ok in [HOME, ".", "Library"] {
+            let got = run_with(
+                &["--rule", "proj.node-modules", "--path", ok],
+                &outside_home_fs(),
+                &platform(Some(HOME)),
+            );
+            assert!(got.is_ok(), "{ok}: {got:?}");
+        }
+    }
+
+    // FR-010, FR-012
+    #[test]
+    fn outside_home_message_is_escaped() {
+        let mut fs = outside_home_fs();
+        let nasty = format!("/Volumes/{NASTY}");
+        fs.insert(nasty.as_str(), meta(true, 30, 0));
+        let err = run_with(&["--path", &nasty], &fs, &platform(Some(HOME))).unwrap_err();
+        assert_eq!(err.exit_code(), 2);
+        let msg = error_message(&err, &Catalog::en().unwrap());
+        assert_no_raw_controls(&msg);
+        assert!(msg.contains("\\x1b[2K"), "{msg}");
+        let expected = Catalog::en()
+            .unwrap()
+            .get(MessageKey::PathOutsideHome)
+            .replace("{path}", &escape_for_terminal(&nasty));
+        assert_eq!(msg, expected);
     }
 
     // FR-007, acceptance 4: a protected `--path` is reported as skipped,
