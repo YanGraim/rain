@@ -101,6 +101,28 @@ fn resolve_path(fs: &dyn Fs, cwd: &Path, given: &Path) -> Result<PathBuf, Invali
     }
 }
 
+/// FR-009: a `--path` whose canonical form is not inside the home.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutsideHome(pub PathBuf);
+
+/// FR-009: every resolved `--path` must be the canonical home or below it.
+/// `given` and `resolved` are parallel; the error names the path as given.
+pub fn ensure_inside_home(
+    fs: &dyn Fs,
+    home: &Path,
+    given: &[PathBuf],
+    resolved: &[PathBuf],
+) -> Result<(), OutsideHome> {
+    let home = fs.canonicalize(home).ok();
+    for (g, r) in given.iter().zip(resolved) {
+        match &home {
+            Some(h) if r.starts_with(h) => {}
+            _ => return Err(OutsideHome(g.clone())),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +245,26 @@ mod tests {
             let got = resolve_paths(&fs, Path::new("/"), &[PathBuf::from(bad)]);
             assert_eq!(got, Err(InvalidPath(PathBuf::from(bad))), "{bad}");
         }
+    }
+
+    // FR-009
+    #[test]
+    fn unresolvable_home_refuses_every_path() {
+        let fs = fake();
+        let given = [PathBuf::from("code")];
+        let resolved = [PathBuf::from("/Users/t/code")];
+        let got = ensure_inside_home(&fs, Path::new("/Users/gone"), &given, &resolved);
+        assert_eq!(got, Err(OutsideHome(PathBuf::from("code"))));
+    }
+
+    // FR-009
+    #[test]
+    fn sibling_with_home_prefix_is_outside() {
+        let mut fs = fake();
+        fs.insert("/Users/t2", meta(true, 9));
+        let given = [PathBuf::from("/Users/t2")];
+        let got = ensure_inside_home(&fs, Path::new("/Users/t"), &given, &given);
+        assert_eq!(got, Err(OutsideHome(PathBuf::from("/Users/t2"))));
     }
 
     // FR-009: the first bad path is reported, as given by the user.
