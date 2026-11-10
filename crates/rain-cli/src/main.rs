@@ -452,4 +452,30 @@ mod tests {
         let once = || report_text(&run(&["--json"]).unwrap(), true, &catalog).unwrap();
         assert_eq!(once().into_bytes(), once().into_bytes());
     }
+
+    // FR-007: a `--path` reached through a symlink to `~/.ssh` is still
+    // protected, because the path is canonicalized first.
+    #[test]
+    fn path_through_symlink_to_ssh_is_protected() {
+        let mut fs = home_fs();
+        fs.insert(h(".ssh/keys"), meta(true, 13, 0))
+            .insert_symlink(h("link"), h(".ssh"))
+            // `lstat` follows symlinks in ancestors, so the real OS reports
+            // `link/keys` as the directory; FakeFs only does exact lookups.
+            .insert(h("link/keys"), meta(true, 13, 0));
+        let report = run_with(
+            &["--rule", "dev.node-modules", "--path", "link/keys"],
+            &fs,
+            &platform(Some(HOME)),
+        )
+        .unwrap();
+        assert!(report.items.is_empty(), "{:?}", report.items);
+        assert_eq!(
+            report.skipped,
+            [Skipped {
+                path: h(".ssh/keys"),
+                reason: SkipReason::Protected,
+            }]
+        );
+    }
 }
