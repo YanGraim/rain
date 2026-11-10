@@ -51,3 +51,21 @@ jobs:
       - name: No test features in release graph
         shell: bash
         run: ./scripts/check-release-features.sh
+
+  # Supply chain: licenses, bans, sources (deny.toml) and RustSec advisories.
+  supply-chain:
+    name: supply-chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Built from source at fixed versions with their own lockfiles.
+      - name: Install cargo-deny and cargo-audit
+        run: cargo install --locked cargo-deny@0.20.2 cargo-audit@0.22.2
+      - name: cargo deny
+        run: cargo deny --locked check
+      - name: cargo audit
+        run: cargo audit
