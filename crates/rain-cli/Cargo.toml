@@ -12,3 +12,7 @@ path = "src/main.rs"
 [dependencies]
 rain-core = { path = "../rain-core" }
 rain-platform = { path = "../rain-platform" }
+serde_json = "1"
+
+[dev-dependencies]
+insta = "1"

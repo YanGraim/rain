@@ -178,6 +178,12 @@ impl Catalog {
     /// Text for `key`; falls back to the key itself so a missing entry
     /// degrades visibly instead of crashing.
     pub fn get(&self, key: MessageKey) -> &str {
+        // A plural message read here would always show the `other` form.
+        debug_assert!(
+            !matches!(self.texts.get(key.as_str()), Some(Text::Plural { .. })),
+            "{} is plural; use get_plural",
+            key.as_str()
+        );
         self.try_get(key).unwrap_or(key.as_str())
     }
 
@@ -326,6 +332,30 @@ mod tests {
             pt.get_plural(MessageKey::TableSkipped, 0),
             pt.get_plural(MessageKey::TableSkipped, 1)
         );
+    }
+
+    // FR-013
+    #[test]
+    fn plural_form_table() {
+        use PluralForm::{One, Other};
+        let cases = [
+            (Locale::En, [Other, One, Other, Other]),
+            (Locale::Es, [Other, One, Other, Other]),
+            (Locale::PtBr, [One, One, Other, Other]),
+        ];
+        for (locale, want) in cases {
+            for (count, form) in [0, 1, 2, 1_000_000].into_iter().zip(want) {
+                assert_eq!(locale.plural_form(count), form, "{} {count}", locale.tag());
+            }
+        }
+    }
+
+    // FR-013: plural messages must go through `get_plural`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "get_plural")]
+    fn get_on_plural_key_panics_in_debug() {
+        let _ = Catalog::en().unwrap().get(MessageKey::TableSkipped);
     }
 
     // FR-013
