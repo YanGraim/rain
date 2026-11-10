@@ -27,6 +27,68 @@ wildcards = "deny"
 # Workspace path dependencies have no version; they are not wildcards.
 allow-wildcard-paths = true
 
+# NFR-006: no network crates. Mirrors scripts/check-no-network.sh; cargo-deny has
+# no prefix globs, so the prefix families list their known members.
+deny = [
+    { crate = "h2" },
+    { crate = "ureq" },
+    { crate = "isahc" },
+    { crate = "surf" },
+    { crate = "attohttpc" },
+    { crate = "minreq" },
+    { crate = "ehttp" },
+    { crate = "awc" },
+    { crate = "axum" },
+    { crate = "warp" },
+    { crate = "tonic" },
+    { crate = "native-tls" },
+    { crate = "socket2" },
+    { crate = "mio" },
+    { crate = "quinn" },
+    { crate = "trust-dns-resolver" },
+    { crate = "hickory-resolver" },
+    { crate = "async-std" },
+    { crate = "async-net" },
+    { crate = "async-io" },
+    { crate = "smol" },
+    { crate = "tokio-rustls" },
+    { crate = "reqwless" },
+    { crate = "ssh2" },
+    { crate = "libssh2-sys" },
+    { crate = "zmq" },
+    { crate = "nng" },
+    { crate = "websocket" },
+    { crate = "tungstenite" },
+    { crate = "tokio-tungstenite" },
+    { crate = "reqwest" },
+    { crate = "reqwest-middleware" },
+    { crate = "hyper" },
+    { crate = "hyper-util" },
+    { crate = "hyper-tls" },
+    { crate = "hyper-rustls" },
+    { crate = "rustls" },
+    { crate = "rustls-native-certs" },
+    { crate = "rustls-pemfile" },
+    { crate = "rustls-webpki" },
+    { crate = "curl" },
+    { crate = "curl-sys" },
+    { crate = "openssl" },
+    { crate = "openssl-sys" },
+    { crate = "actix" },
+    { crate = "actix-web" },
+    { crate = "actix-http" },
+    { crate = "actix-rt" },
+    { crate = "actix-server" },
+    { crate = "libp2p" },
+    { crate = "libp2p-core" },
+    { crate = "libp2p-swarm" },
+    { crate = "libp2p-tcp" },
+]
+
+[[bans.features]]
+crate = "tokio"
+deny = ["net"]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
