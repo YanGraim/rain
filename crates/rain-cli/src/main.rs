@@ -10,13 +10,16 @@ use rain_core::fs::{Fs, StdFs};
 use rain_core::messages::{Catalog, MessageKey};
 use rain_core::model::ScanReport;
 use rain_core::planner::{self, ResolvedRoots, ScanContext, ScanError};
-use rain_core::protect::ProtectList;
+use rain_core::protect::{ProtectError, ProtectList};
 use rain_core::rule::{Rule, RuleContext};
 use rain_core::rules;
-use rain_platform::{Platform, Root};
+use rain_platform::{Platform, PlatformError, Root};
+use signal_hook::consts::SIGINT;
+use signal_hook::flag;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// FR-012 exit codes.
@@ -73,6 +76,11 @@ fn run_scan(
     catalog: &Catalog,
     cancel: &AtomicBool,
 ) -> Result<ScanReport, CliError> {
+    if env.platform.is_root_user() {
+        return Err(CliError::Runtime(
+            catalog.get(MessageKey::RunningAsRoot).to_owned(),
+        ));
+    }
     let selected = select_rules(&args.rules, catalog)?;
     let user_paths =
         args::resolve_paths(env.fs, &env.cwd, &args.paths).map_err(|InvalidPath(path)| {
@@ -83,17 +91,10 @@ fn run_scan(
             )
         })?;
 
-    let home_error = |reason: String| {
-        CliError::Runtime(
-            catalog
-                .get(MessageKey::InvalidHome)
-                .replace("{reason}", &escape_for_terminal(&reason)),
-        )
-    };
     let resolve = |root| {
         env.platform
             .resolve(root)
-            .map_err(|e| home_error(e.to_string()))
+            .map_err(|e| CliError::Runtime(home_error_message(&e, catalog)))
     };
     let roots = ResolvedRoots {
         home: resolve(Root::Home)?,
@@ -101,7 +102,7 @@ fn run_scan(
         logs: resolve(Root::Logs)?,
     };
     let protect = ProtectList::builtin(env.platform)
-        .map_err(|e| home_error(e.to_string()))?
+        .map_err(|e| CliError::Runtime(protect_error_message(&e, catalog)))?
         .with_identities(env.fs);
 
     let ctx = ScanContext {
@@ -118,6 +119,54 @@ fn run_scan(
     planner::scan(&selected, &ctx, cancel).map_err(|e| match e {
         ScanError::Cancelled => CliError::Cancelled,
     })
+}
+
+/// FR-015: one localized message per kind of unusable home, with any
+/// path escaped (FR-010).
+fn home_error_message(e: &PlatformError, catalog: &Catalog) -> String {
+    let (key, path) = match e {
+        PlatformError::HomeMissing => (MessageKey::HomeMissing, None),
+        PlatformError::HomeEmpty => (MessageKey::HomeEmpty, None),
+        PlatformError::HomeNotAbsolute(p) => (MessageKey::HomeNotAbsolute, Some(p)),
+        PlatformError::HomeNotFound(p) => (MessageKey::HomeNotFound, Some(p)),
+        PlatformError::HomeNotADirectory(p) => (MessageKey::HomeNotADirectory, Some(p)),
+        PlatformError::HomeNotAccessible(p) => (MessageKey::HomeNotAccessible, Some(p)),
+        PlatformError::HomeIsFilesystemRoot(p) => (MessageKey::HomeIsFilesystemRoot, Some(p)),
+    };
+    let text = catalog.get(key);
+    match path {
+        Some(p) => text.replace("{path}", &escape_for_terminal(&p.display().to_string())),
+        None => text.to_owned(),
+    }
+}
+
+/// FR-015: a bad home stops the scan; a broken built-in list is reported as is.
+fn protect_error_message(e: &ProtectError, catalog: &Catalog) -> String {
+    match e {
+        ProtectError::Platform(p) => home_error_message(p, catalog),
+        other => catalog
+            .get(MessageKey::ProtectListInvalid)
+            .replace("{reason}", &escape_for_terminal(&other.to_string())),
+    }
+}
+
+/// FR-011: Ctrl+C sets the returned flag, which the walker polls. A second
+/// Ctrl+C while the flag is already set exits at once with 130.
+fn install_cancel_handler() -> std::io::Result<Arc<AtomicBool>> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    flag::register_conditional_shutdown(SIGINT, i32::from(EXIT_CANCELLED), Arc::clone(&cancel))?;
+    flag::register(SIGINT, Arc::clone(&cancel))?;
+    Ok(cancel)
+}
+
+/// Runs the scan and renders it; nothing is rendered when cancelled (FR-011).
+fn scan_output(
+    args: &ScanArgs,
+    env: &Env,
+    catalog: &Catalog,
+    cancel: &AtomicBool,
+) -> Result<String, CliError> {
+    run_scan(args, env, catalog, cancel).and_then(|r| report_text(&r, args.json, catalog))
 }
 
 /// FR-008: no `--rule` means every built-in rule.
@@ -174,6 +223,8 @@ fn real_platform(catalog: &Catalog) -> Result<Box<dyn Platform>, CliError> {
 }
 
 fn main() -> anyhow::Result<ExitCode> {
+    // FR-011: installed before any work so an early Ctrl+C still yields 130.
+    let cancel = install_cancel_handler()?;
     let catalog = Catalog::en()?;
     let cli = match args::parse(&catalog, std::env::args_os()) {
         Ok(cli) => cli,
@@ -189,17 +240,15 @@ fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     };
     let cwd = std::env::current_dir()?;
-    let result = real_platform(&catalog)
-        .and_then(|platform| {
-            let env = Env {
-                platform: platform.as_ref(),
-                fs: &StdFs,
-                clock: &SystemClock,
-                cwd,
-            };
-            run_scan(&scan, &env, &catalog, &AtomicBool::new(false))
-        })
-        .and_then(|report| report_text(&report, scan.json, &catalog));
+    let result = real_platform(&catalog).and_then(|platform| {
+        let env = Env {
+            platform: platform.as_ref(),
+            fs: &StdFs,
+            clock: &SystemClock,
+            cwd,
+        };
+        scan_output(&scan, &env, &catalog, &cancel)
+    });
     match result {
         Ok(text) => {
             print!("{text}");
@@ -388,6 +437,88 @@ mod tests {
         let catalog = Catalog::en().unwrap();
         let err = run_scan(&args(&[]), &env, &catalog, &AtomicBool::new(true)).unwrap_err();
         assert_eq!(err.exit_code(), 130);
+    }
+
+    // FR-015, FR-012, NFR-007: root, `sudo` or real uid 0 is refused with
+    // exit 1 before anything is read.
+    #[test]
+    fn root_user_exits_1() {
+        let mut p = platform(Some(HOME));
+        p.root = true;
+        let err = run_with(&[], &home_fs(), &p).unwrap_err();
+        assert_eq!(err.exit_code(), 1);
+        let catalog = Catalog::en().unwrap();
+        assert_eq!(
+            error_message(&err, &catalog),
+            catalog.get(MessageKey::RunningAsRoot)
+        );
+    }
+
+    // FR-015, FR-012: each kind of unusable home has its own message, exit 1.
+    #[test]
+    fn invalid_home_exits_1() {
+        let catalog = Catalog::en().unwrap();
+        let cases = [
+            (None, MessageKey::HomeMissing),
+            (Some(""), MessageKey::HomeEmpty),
+            (Some("rel/home"), MessageKey::HomeNotAbsolute),
+            (Some("/"), MessageKey::HomeIsFilesystemRoot),
+        ];
+        for (home, key) in cases {
+            let err = run_with(&[], &home_fs(), &platform(home)).unwrap_err();
+            assert_eq!(err.exit_code(), 1, "{home:?}");
+            let expected = catalog
+                .get(key)
+                .replace("{path}", &escape_for_terminal(home.unwrap_or("")));
+            assert_eq!(error_message(&err, &catalog), expected, "{home:?}");
+        }
+        for e in [
+            PlatformError::HomeNotFound(PathBuf::from("/x")),
+            PlatformError::HomeNotADirectory(PathBuf::from("/x")),
+            PlatformError::HomeNotAccessible(PathBuf::from("/x")),
+        ] {
+            let msg = home_error_message(&e, &catalog);
+            assert!(msg.contains("/x"), "{msg}");
+            assert!(!msg.contains("{path}"), "{msg}");
+        }
+        let distinct: std::collections::BTreeSet<_> = [
+            MessageKey::HomeMissing,
+            MessageKey::HomeEmpty,
+            MessageKey::HomeNotAbsolute,
+            MessageKey::HomeNotFound,
+            MessageKey::HomeNotADirectory,
+            MessageKey::HomeNotAccessible,
+            MessageKey::HomeIsFilesystemRoot,
+        ]
+        .iter()
+        .map(|k| catalog.get(*k))
+        .collect();
+        assert_eq!(distinct.len(), 7);
+    }
+
+    // FR-011, FR-012: Ctrl+C sets the scan's cancel flag; the scan then
+    // exits 130 and prints no report or total.
+    #[test]
+    fn sigint_exits_130_without_total() {
+        let cancel = install_cancel_handler().unwrap();
+        assert!(!cancel.load(std::sync::atomic::Ordering::SeqCst));
+        signal_hook::low_level::raise(signal_hook::consts::SIGINT).unwrap();
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+
+        let fs = home_fs();
+        let p = platform(Some(HOME));
+        let env = Env {
+            platform: &p,
+            fs: &fs,
+            clock: &clock(),
+            cwd: PathBuf::from(HOME),
+        };
+        let catalog = Catalog::en().unwrap();
+        let err = scan_output(&args(&[]), &env, &catalog, &cancel).unwrap_err();
+        assert_eq!(err.exit_code(), 130);
+        let msg = error_message(&err, &catalog);
+        assert_eq!(msg, catalog.get(MessageKey::ScanCancelled));
+        assert!(!msg.contains(catalog.get(MessageKey::TableTotal)), "{msg}");
     }
 
     /// Control, bidi and OSC 52 payloads an attacker could put in a name.

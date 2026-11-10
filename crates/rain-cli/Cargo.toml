@@ -17,6 +17,8 @@ clap = { version = "4", default-features = false, features = ["std", "derive", "
 rain-core = { path = "../rain-core" }
 rain-platform = { path = "../rain-platform" }
 serde_json = "1"
+# FR-011: Ctrl+C only sets an AtomicBool (no thread, no unsafe on our side).
+signal-hook = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 insta = "1"
