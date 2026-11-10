@@ -83,7 +83,7 @@ fn fixture_items_for_xcode_and_homebrew() {
         },
         threads: Some(2),
     };
-    let selected = rules::select(&["macos.xcode.derived-data", "macos.homebrew.cache"]).unwrap();
+    let selected = rules::select(&["apple.derived-data", "pkg.homebrew"]).unwrap();
     let report = scan(&selected, &ctx, &AtomicBool::new(false)).unwrap();
 
     let got: Vec<_> = report
@@ -94,14 +94,10 @@ fn fixture_items_for_xcode_and_homebrew() {
     assert_eq!(
         got,
         vec![
-            ("macos.homebrew.cache", brew.join("downloads"), 1),
-            (
-                "macos.homebrew.cache",
-                brew.join("git--2.4.bottle.tar.gz"),
-                1
-            ),
-            ("macos.xcode.derived-data", dd.join("App-abc"), 2),
-            ("macos.xcode.derived-data", dd.join("Lib-def"), 1),
+            ("apple.derived-data", dd.join("App-abc"), 2),
+            ("apple.derived-data", dd.join("Lib-def"), 1),
+            ("pkg.homebrew", brew.join("downloads"), 1),
+            ("pkg.homebrew", brew.join("git--2.4.bottle.tar.gz"), 1),
         ]
     );
     let expected: u64 = [

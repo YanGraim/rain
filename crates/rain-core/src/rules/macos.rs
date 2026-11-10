@@ -9,10 +9,10 @@ use rain_platform::{Os, Root};
 /// FR-002: Xcode build products; each project folder is one item.
 pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
-        id: RuleId::new("macos.xcode.derived-data"),
+        id: RuleId::new("apple.derived-data"),
         category: Category::DevArtifacts,
         risk: Risk::Low,
-        name_key: "rule.macos.xcode.derived-data",
+        name_key: "rule.apple.derived-data",
         os: &[Os::Macos],
     },
     root: Root::Home,
@@ -23,10 +23,10 @@ pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
 /// user caches rule so it keeps these bytes (ADR 0005).
 pub static HOMEBREW_CACHE: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
-        id: RuleId::new("macos.homebrew.cache"),
+        id: RuleId::new("pkg.homebrew"),
         category: Category::PackageManagers,
         risk: Risk::Low,
-        name_key: "rule.macos.homebrew.cache",
+        name_key: "rule.pkg.homebrew",
         os: &[Os::Macos],
     },
     root: Root::Caches,
@@ -158,7 +158,7 @@ mod tests {
             .insert(at(DD, "Lib-def/Index"), file(6, 4))
             .insert(at(DD, "ModuleCache.noindex"), file(7, 2));
         let report = run(&fs, &[&XCODE_DERIVED_DATA]);
-        let id = "macos.xcode.derived-data";
+        let id = "apple.derived-data";
         assert_eq!(
             items(&report),
             vec![
@@ -184,7 +184,7 @@ mod tests {
             .insert(at(BREW, "git--2.4.bottle.tar.gz"), file(15, 10))
             .insert(at(CACHES, "com.other.app"), file(16, 99));
         let report = run(&fs, &[&HOMEBREW_CACHE]);
-        let id = "macos.homebrew.cache";
+        let id = "pkg.homebrew";
         assert_eq!(
             items(&report),
             vec![
@@ -211,10 +211,7 @@ mod tests {
             .collect();
         assert_eq!(
             totals,
-            vec![
-                ("macos.homebrew.cache", 0, 0),
-                ("macos.xcode.derived-data", 0, 0)
-            ]
+            vec![("apple.derived-data", 0, 0), ("pkg.homebrew", 0, 0)]
         );
     }
 
@@ -249,7 +246,7 @@ mod tests {
         let report = run(&fs, &[&XCODE_DERIVED_DATA]);
         assert_eq!(
             items(&report),
-            vec![("macos.xcode.derived-data", at(DD, "App"), 4 * 512, 1)]
+            vec![("apple.derived-data", at(DD, "App"), 4 * 512, 1)]
         );
         assert!(report
             .skipped

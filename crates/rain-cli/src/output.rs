@@ -258,8 +258,8 @@ mod tests {
     use std::io::ErrorKind;
     use std::path::PathBuf;
 
-    const CACHES: RuleId = RuleId::new("macos.user.caches");
-    const LOGS: RuleId = RuleId::new("macos.user.logs");
+    const CACHES: RuleId = RuleId::new("sys.user-caches");
+    const LOGS: RuleId = RuleId::new("sys.logs");
 
     fn item(rule: RuleId, path: &str, bytes: u64, files: u64) -> ScanItem {
         let path = PathBuf::from(path);

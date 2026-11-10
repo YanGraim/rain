@@ -2,8 +2,8 @@
 source: crates/rain-cli/src/output.rs
 expression: "render_table(&full_report(), &en())"
 ---
-Rule               Path                             Size
-macos.user.caches  /Users/u/Library/Caches/com.a  1.2 GB
-macos.user.caches  /Users/u/Library/Caches/com.b  4.1 kB
-Total                                             1.2 GB
+Rule             Path                             Size
+sys.user-caches  /Users/u/Library/Caches/com.a  1.2 GB
+sys.user-caches  /Users/u/Library/Caches/com.b  4.1 kB
+Total                                           1.2 GB
 8 items skipped

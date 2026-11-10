@@ -1,4 +1,4 @@
-//! `macos.user.caches` and `macos.user.logs` against the real filesystem.
+//! `sys.user-caches` and `sys.logs` against the real filesystem.
 //! The checked-in fixture `fixtures/user-library` is copied into a tempdir
 //! under `CARGO_TARGET_TMPDIR`; nothing outside that tempdir is touched.
 
@@ -77,7 +77,7 @@ fn fixture_children_are_items() {
         },
         threads: None,
     };
-    let selected = rules::select(&["macos.user.caches", "macos.user.logs"]).unwrap();
+    let selected = rules::select(&["sys.user-caches", "sys.logs"]).unwrap();
     let report = scan(&selected, &ctx, &AtomicBool::new(false)).unwrap();
 
     let got: Vec<(&str, PathBuf, u64)> = report
@@ -92,12 +92,12 @@ fn fixture_children_are_items() {
         })
         .collect();
     let want: Vec<(&str, PathBuf, u64)> = [
-        ("macos.user.caches", "Caches/a.db", 1),
-        ("macos.user.caches", "Caches/b.bin", 1),
-        ("macos.user.caches", "Caches/c.tmp", 1),
-        ("macos.user.caches", "Caches/com.example.app", 2),
-        ("macos.user.logs", "Logs/DiagnosticReports", 1),
-        ("macos.user.logs", "Logs/app.log", 1),
+        ("sys.logs", "Logs/DiagnosticReports", 1),
+        ("sys.logs", "Logs/app.log", 1),
+        ("sys.user-caches", "Caches/a.db", 1),
+        ("sys.user-caches", "Caches/b.bin", 1),
+        ("sys.user-caches", "Caches/c.tmp", 1),
+        ("sys.user-caches", "Caches/com.example.app", 2),
     ]
     .into_iter()
     .map(|(r, p, n)| (r, PathBuf::from(p), n))

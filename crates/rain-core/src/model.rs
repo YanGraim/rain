@@ -8,7 +8,7 @@ pub use crate::walk::{SkipReason, Skipped};
 /// Version of the report layout; bumped on any breaking change (FR-010).
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Stable rule identifier, e.g. `macos.user.caches`.
+/// Stable rule identifier, e.g. `sys.user-caches`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuleId(&'static str);
 
