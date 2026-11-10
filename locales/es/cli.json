@@ -15,5 +15,12 @@
   "rule.macos.xcode.derived-data": "DerivedData de Xcode",
   "rule.macos.user.logs": "Registros del usuario",
   "rule.macos.user.caches": "Cachés del usuario",
-  "rule.dev.node-modules": "node_modules antiguos"
+  "rule.dev.node-modules": "node_modules antiguos",
+  "help.about": "Rain: limpia tu computadora",
+  "help.scan": "Encuentra espacio recuperable sin borrar nada",
+  "help.rule": "Ejecuta solo esta regla (se puede repetir)",
+  "help.path": "Carpeta donde buscar node_modules (se puede repetir; por defecto: carpeta de inicio)",
+  "help.min-age-days": "Días sin cambios para que un proyecto se considere inactivo",
+  "help.json": "Imprime un documento JSON en lugar de una tabla",
+  "error.invalid-home": "No se puede usar la carpeta de inicio: {reason}"
 }

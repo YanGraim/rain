@@ -76,6 +76,13 @@ pub enum MessageKey {
     RuleUserLogs,
     RuleUserCaches,
     RuleDevNodeModules,
+    HelpAbout,
+    HelpScan,
+    HelpRule,
+    HelpPath,
+    HelpMinAgeDays,
+    HelpJson,
+    InvalidHome,
 }
 
 impl MessageKey {
@@ -94,6 +101,13 @@ impl MessageKey {
         MessageKey::RuleUserLogs,
         MessageKey::RuleUserCaches,
         MessageKey::RuleDevNodeModules,
+        MessageKey::HelpAbout,
+        MessageKey::HelpScan,
+        MessageKey::HelpRule,
+        MessageKey::HelpPath,
+        MessageKey::HelpMinAgeDays,
+        MessageKey::HelpJson,
+        MessageKey::InvalidHome,
     ];
 
     /// Key as written in the locale file.
@@ -113,6 +127,13 @@ impl MessageKey {
             MessageKey::RuleUserLogs => "rule.macos.user.logs",
             MessageKey::RuleUserCaches => "rule.macos.user.caches",
             MessageKey::RuleDevNodeModules => "rule.dev.node-modules",
+            MessageKey::HelpAbout => "help.about",
+            MessageKey::HelpScan => "help.scan",
+            MessageKey::HelpRule => "help.rule",
+            MessageKey::HelpPath => "help.path",
+            MessageKey::HelpMinAgeDays => "help.min-age-days",
+            MessageKey::HelpJson => "help.json",
+            MessageKey::InvalidHome => "error.invalid-home",
         }
     }
 }

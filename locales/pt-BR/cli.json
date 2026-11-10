@@ -15,5 +15,12 @@
   "rule.macos.xcode.derived-data": "DerivedData do Xcode",
   "rule.macos.user.logs": "Logs do usuário",
   "rule.macos.user.caches": "Caches do usuário",
-  "rule.dev.node-modules": "node_modules antigos"
+  "rule.dev.node-modules": "node_modules antigos",
+  "help.about": "Rain: lave seu computador",
+  "help.scan": "Encontra espaço recuperável sem apagar nada",
+  "help.rule": "Executa só esta regra (pode repetir)",
+  "help.path": "Pasta onde procurar node_modules (pode repetir; padrão: home)",
+  "help.min-age-days": "Dias sem alteração para um projeto contar como inativo",
+  "help.json": "Imprime um documento JSON em vez de uma tabela",
+  "error.invalid-home": "A pasta home não pode ser usada: {reason}"
 }
