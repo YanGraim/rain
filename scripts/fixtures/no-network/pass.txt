@@ -1,0 +1,5 @@
+rain-cli v0.1.0 (/repo/crates/rain-cli)|default
+anyhow v1.0.86|default,std
+clap v4.5.4|default,derive,std
+tokio v1.38.0|default,fs,rt
+rain-core v0.1.0 (/repo/crates/rain-core)|

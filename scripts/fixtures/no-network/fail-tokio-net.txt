@@ -1,0 +1,2 @@
+rain-cli v0.1.0 (/repo/crates/rain-cli)|default
+tokio v1.38.0|default,fs,net,rt

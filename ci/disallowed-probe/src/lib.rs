@@ -42,3 +42,10 @@ pub fn unix(p: &Path, f: &File) -> io::Result<()> {
     std::os::unix::fs::chroot(p)?;
     Ok(())
 }
+
+pub fn net() -> io::Result<()> {
+    let _ = std::net::TcpStream::connect("127.0.0.1:1")?;
+    let _ = std::net::UdpSocket::bind("127.0.0.1:0")?;
+    let _ = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(())
+}

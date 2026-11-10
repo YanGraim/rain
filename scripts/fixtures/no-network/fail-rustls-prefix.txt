@@ -1,0 +1,2 @@
+rain-cli v0.1.0 (/repo/crates/rain-cli)|default
+rustls-pemfile v2.1.2|default,std

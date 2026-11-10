@@ -32,4 +32,8 @@ disallowed-methods = [
     { path = "std::os::unix::fs::chroot", reason = "scan is read-only" },
     # Spawning a process can do anything, including writing to disk.
     { path = "std::process::Command::new", reason = "external processes bypass the read-only guarantee" },
+    # NFR-006: the scan is offline; no sockets.
+    { path = "std::net::TcpStream::connect", reason = "rain never uses the network" },
+    { path = "std::net::UdpSocket::bind", reason = "rain never uses the network" },
+    { path = "std::net::TcpListener::bind", reason = "rain never uses the network" },
 ]
