@@ -2,10 +2,12 @@
 
 use crate::fs::Fs;
 use crate::model::{
-    ItemId, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason, Skipped, SCHEMA_VERSION,
+    ItemId, ProviderStatus, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason, Skipped, ToolItem,
+    ToolStatus, Unavailable, SCHEMA_VERSION,
 };
 use crate::protect::ProtectList;
-use crate::rule::{EntryInfo, RootedPath, Rule, RuleContext, RuleKind};
+use crate::rule::{EntryInfo, ProviderRule, RootedPath, Rule, RuleContext, RuleKind};
+use crate::tools::{ExitStatusKind, ProviderItem, ToolError, ToolRunner};
 use crate::walk::Walker;
 use rain_platform::Root;
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,6 +31,8 @@ pub struct ScanContext<'a> {
     pub protect: &'a ProtectList,
     pub roots: &'a ResolvedRoots,
     pub rule_ctx: RuleContext,
+    /// Runs provider probes (ADR 0004).
+    pub tools: &'a dyn ToolRunner,
     /// Worker threads; `None` uses `available_parallelism`. The report is
     /// the same for any value.
     pub threads: Option<usize>,
@@ -53,6 +57,28 @@ pub fn scan(
     ctx: &ScanContext,
     cancel: &AtomicBool,
 ) -> Result<ScanReport, ScanError> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err(ScanError::Cancelled);
+    }
+    std::thread::scope(|s| {
+        let probes = s.spawn(|| probe_all(rules, ctx.tools, cancel));
+        let files = scan_files(rules, ctx, cancel);
+        let probes = match probes.join() {
+            Ok(probes) => probes,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+        let (items, mut skipped) = files?;
+        let (tool_items, providers) = check_tool_paths(probes?, ctx, &mut skipped);
+        Ok(report(rules, items, skipped, tool_items, providers))
+    })
+}
+
+/// Discovery and measurement of the file rules.
+fn scan_files(
+    rules: &[&dyn Rule],
+    ctx: &ScanContext,
+    cancel: &AtomicBool,
+) -> Result<(Vec<ScanItem>, BTreeSet<Skipped>), ScanError> {
     let threads = ctx
         .threads
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
@@ -90,7 +116,7 @@ pub fn scan(
             });
         }
     }
-    Ok(report(rules, items, skipped))
+    Ok((items, skipped))
 }
 
 /// Phase 1: candidate path -> index of the highest-priority rule that found
@@ -104,7 +130,9 @@ fn discover(
 ) -> Result<BTreeMap<PathBuf, usize>, ScanError> {
     let mut found: BTreeMap<PathBuf, usize> = BTreeMap::new();
     for (idx, rule) in rules.iter().enumerate() {
-        let RuleKind::Files(files) = rule.kind();
+        let RuleKind::Files(files) = rule.kind() else {
+            continue;
+        };
         let mut candidates: BTreeSet<PathBuf> = BTreeSet::new();
         for rooted in files.roots(&ctx.rule_ctx) {
             let (root, silent_if_missing) = match resolve(&rooted, ctx.roots) {
@@ -229,12 +257,171 @@ fn resolve(rooted: &RootedPath, roots: &ResolvedRoots) -> Result<(PathBuf, bool)
     }
 }
 
-fn report(rules: &[&dyn Rule], items: Vec<ScanItem>, skipped: BTreeSet<Skipped>) -> ScanReport {
+/// What one provider rule's probe gave.
+type Probe<'r> = (
+    &'r dyn Rule,
+    &'r dyn ProviderRule,
+    Result<Vec<ProviderItem>, Unavailable>,
+);
+
+/// Runs every provider probe in registry order. Only a cancel stops it;
+/// any other failure makes that one provider unavailable (FR-022).
+fn probe_all<'r>(
+    rules: &[&'r dyn Rule],
+    tools: &dyn ToolRunner,
+    cancel: &AtomicBool,
+) -> Result<Vec<Probe<'r>>, ScanError> {
+    let mut probes = Vec::new();
+    for &rule in rules {
+        let RuleKind::Provider(provider) = rule.kind() else {
+            continue;
+        };
+        if cancel.load(Ordering::SeqCst) {
+            return Err(ScanError::Cancelled);
+        }
+        let result = match tools.run(&provider.probe(), cancel) {
+            Err(ToolError::Cancelled) => return Err(ScanError::Cancelled),
+            Err(e) => Err(Unavailable::Tool(e)),
+            Ok(out) if out.status != ExitStatusKind::Success => Err(Unavailable::Failed),
+            Ok(out) => provider
+                .parse(&out)
+                .map_err(|_| Unavailable::Parse)
+                .and_then(unique_keys),
+        };
+        probes.push((rule, provider, result));
+    }
+    if cancel.load(Ordering::SeqCst) {
+        return Err(ScanError::Cancelled);
+    }
+    Ok(probes)
+}
+
+fn unique_keys(items: Vec<ProviderItem>) -> Result<Vec<ProviderItem>, Unavailable> {
+    let mut seen = BTreeSet::new();
+    if items.iter().all(|i| seen.insert(i.key.as_str())) {
+        Ok(items)
+    } else {
+        Err(Unavailable::Parse)
+    }
+}
+
+/// FR-007, ADR 0004 §5: every path a tool names is canonicalized and kept
+/// only if unprotected and strictly inside one of the rule's roots. An item
+/// that named paths and kept none is dropped.
+fn check_tool_paths(
+    probes: Vec<Probe>,
+    ctx: &ScanContext,
+    skipped: &mut BTreeSet<Skipped>,
+) -> (Vec<ToolItem>, Vec<ProviderStatus>) {
+    let mut items = Vec::new();
+    let mut statuses = Vec::new();
+    for (rule, provider, result) in probes {
+        let id = rule.meta().id;
+        let found = match result {
+            Ok(found) => found,
+            Err(why) => {
+                statuses.push(ProviderStatus {
+                    rule: id,
+                    status: ToolStatus::Unavailable(why),
+                });
+                continue;
+            }
+        };
+        statuses.push(ProviderStatus {
+            rule: id,
+            status: ToolStatus::Ok,
+        });
+        let roots = provider_roots(provider, ctx, skipped);
+        for item in found {
+            let named = !item.paths.is_empty();
+            let paths: BTreeSet<PathBuf> = item
+                .paths
+                .iter()
+                .filter_map(|p| checked_path(p, &roots, ctx, skipped))
+                .collect();
+            if named && paths.is_empty() {
+                continue;
+            }
+            items.push(ToolItem {
+                id: ItemId::of_key(id, &item.key),
+                rule: id,
+                key: item.key,
+                label: item.label,
+                reported_bytes: item.reported_bytes,
+                paths: paths.into_iter().collect(),
+            });
+        }
+    }
+    items.sort_by(|a, b| (a.rule, &a.key).cmp(&(b.rule, &b.key)));
+    statuses.sort();
+    statuses.dedup_by_key(|s| s.rule);
+    (items, statuses)
+}
+
+fn provider_roots(
+    provider: &dyn ProviderRule,
+    ctx: &ScanContext,
+    skipped: &mut BTreeSet<Skipped>,
+) -> Vec<PathBuf> {
+    provider
+        .roots()
+        .iter()
+        .filter_map(|rooted| match resolve(rooted, ctx.roots) {
+            Ok((root, _)) => ctx.fs.canonicalize(&root).ok(),
+            Err(refused) => {
+                skipped.insert(refused);
+                None
+            }
+        })
+        .collect()
+}
+
+fn checked_path(
+    path: &Path,
+    roots: &[PathBuf],
+    ctx: &ScanContext,
+    skipped: &mut BTreeSet<Skipped>,
+) -> Option<PathBuf> {
+    let refuse = |path: PathBuf, reason| Skipped { path, reason };
+    if !path.is_absolute() {
+        skipped.insert(refuse(path.to_path_buf(), SkipReason::OutsideRoot));
+        return None;
+    }
+    let canonical = match ctx.fs.canonicalize(path) {
+        Ok(canonical) => canonical,
+        Err(e) => {
+            skipped.insert(refuse(path.to_path_buf(), SkipReason::from(&e)));
+            return None;
+        }
+    };
+    if ctx.protect.is_protected_on(ctx.fs, &canonical) || ctx.protect.contains_protected(&canonical)
+    {
+        skipped.insert(refuse(canonical, SkipReason::Protected));
+        return None;
+    }
+    if !roots
+        .iter()
+        .any(|root| canonical.starts_with(root) && &canonical != root)
+    {
+        skipped.insert(refuse(canonical, SkipReason::OutsideRoot));
+        return None;
+    }
+    Some(canonical)
+}
+
+fn report(
+    rules: &[&dyn Rule],
+    items: Vec<ScanItem>,
+    skipped: BTreeSet<Skipped>,
+    tool_items: Vec<ToolItem>,
+    providers: Vec<ProviderStatus>,
+) -> ScanReport {
     let mut totals: Vec<RuleTotal> = rules
         .iter()
         .map(|r| {
             let meta = r.meta();
             let mine = items.iter().filter(|i| i.rule == meta.id);
+            let tools = tool_items.iter().filter(|i| i.rule == meta.id).count();
             RuleTotal {
                 rule: meta.id,
                 category: meta.category,
@@ -242,7 +429,7 @@ fn report(rules: &[&dyn Rule], items: Vec<ScanItem>, skipped: BTreeSet<Skipped>)
                 allocated_bytes: mine
                     .clone()
                     .fold(0u64, |acc, i| acc.saturating_add(i.allocated_bytes)),
-                items: mine.count() as u64,
+                items: (mine.count() + tools) as u64,
             }
         })
         .collect();
@@ -251,12 +438,18 @@ fn report(rules: &[&dyn Rule], items: Vec<ScanItem>, skipped: BTreeSet<Skipped>)
     let total_bytes = items
         .iter()
         .fold(0u64, |acc, i| acc.saturating_add(i.allocated_bytes));
+    let tool_total_bytes = tool_items
+        .iter()
+        .fold(0u64, |acc, i| acc.saturating_add(i.reported_bytes));
     ScanReport {
         schema_version: SCHEMA_VERSION,
         rules: totals,
         items,
         skipped: skipped.into_iter().collect(),
         total_bytes,
+        tool_items,
+        providers,
+        tool_total_bytes,
     }
 }
 
@@ -410,6 +603,16 @@ mod tests {
         cancel: &AtomicBool,
         threads: Option<usize>,
     ) -> Result<ScanReport, ScanError> {
+        run_full(fs, rules, cancel, threads, &crate::tools::NoTools)
+    }
+
+    fn run_full(
+        fs: &dyn Fs,
+        rules: &[&dyn Rule],
+        cancel: &AtomicBool,
+        threads: Option<usize>,
+        tools: &dyn ToolRunner,
+    ) -> Result<ScanReport, ScanError> {
         let protect = match ProtectList::builtin(&HomeAt) {
             Ok(list) => list.with_identities(fs),
             Err(e) => panic!("builtin failed: {e}"),
@@ -424,6 +627,7 @@ mod tests {
                 user_paths: Vec::new(),
                 now: SystemTime::UNIX_EPOCH,
             },
+            tools,
             threads,
         };
         scan(rules, &ctx, cancel)
@@ -997,5 +1201,472 @@ mod tests {
                 reason: SkipReason::Symlink,
             }]
         );
+    }
+
+    mod providers {
+        use super::*;
+        use crate::model::{ProviderStatus, ToolItem, ToolStatus, Unavailable};
+        use crate::rule::ProviderRule;
+        use crate::tools::{
+            ExitStatusKind, FakeReply, FakeToolRunner, ParseError, ProviderItem, ToolCall,
+            ToolError, ToolId, ToolOutput,
+        };
+        use std::sync::Mutex;
+        use std::thread::ThreadId;
+
+        const DF: &[&str] = &["system", "df"];
+
+        /// Parses lines `key bytes [path...]`; anything else is an error.
+        struct TestProvider {
+            meta: RuleMeta,
+            tool: ToolId,
+            roots: Vec<RootedPath>,
+        }
+
+        impl Rule for TestProvider {
+            fn meta(&self) -> &RuleMeta {
+                &self.meta
+            }
+            fn kind(&self) -> RuleKind<'_> {
+                RuleKind::Provider(self)
+            }
+        }
+
+        impl ProviderRule for TestProvider {
+            fn probe(&self) -> ToolCall {
+                ToolCall::read(self.tool, DF)
+            }
+            fn parse(&self, out: &ToolOutput) -> Result<Vec<ProviderItem>, ParseError> {
+                out.stdout
+                    .lines()
+                    .map(|line| {
+                        let mut parts = line.split(' ');
+                        let key = parts.next().ok_or(ParseError("key"))?;
+                        let bytes = parts
+                            .next()
+                            .and_then(|b| b.parse().ok())
+                            .ok_or(ParseError("bytes"))?;
+                        Ok(ProviderItem {
+                            key: key.to_owned(),
+                            label: format!("label {key}"),
+                            reported_bytes: bytes,
+                            paths: parts.map(PathBuf::from).collect(),
+                        })
+                    })
+                    .collect()
+            }
+            fn act(&self, _: &ProviderItem) -> Option<ToolCall> {
+                None
+            }
+            fn roots(&self) -> Vec<RootedPath> {
+                self.roots.clone()
+            }
+        }
+
+        fn provider(id: &'static str, tool: ToolId) -> TestProvider {
+            TestProvider {
+                meta: rule(id, Vec::new()).meta,
+                tool,
+                roots: under(Root::Caches, "Homebrew"),
+            }
+        }
+
+        fn replying(tool: ToolId, reply: FakeReply) -> FakeToolRunner {
+            let mut fake = FakeToolRunner::new();
+            fake.reply(tool, DF, reply);
+            fake
+        }
+
+        fn ok(stdout: &str) -> FakeReply {
+            FakeReply::Output(ToolOutput::success(stdout))
+        }
+
+        fn scan_with(fs: &FakeFs, rules: &[&dyn Rule], tools: &dyn ToolRunner) -> ScanReport {
+            match run_full(fs, rules, &AtomicBool::new(false), Some(2), tools) {
+                Ok(report) => report,
+                Err(e) => panic!("scan failed: {e}"),
+            }
+        }
+
+        fn status(report: &ScanReport) -> Vec<(&'static str, ToolStatus)> {
+            report
+                .providers
+                .iter()
+                .map(|p: &ProviderStatus| (p.rule.as_str(), p.status))
+                .collect()
+        }
+
+        fn keys(report: &ScanReport) -> Vec<(&'static str, String, u64)> {
+            report
+                .tool_items
+                .iter()
+                .map(|i| (i.rule.as_str(), i.key.clone(), i.reported_bytes))
+                .collect()
+        }
+
+        fn unavailable(e: ToolError) -> ToolStatus {
+            ToolStatus::Unavailable(Unavailable::Tool(e))
+        }
+
+        // FR-005, FR-021
+        #[test]
+        fn provider_items_are_reported_with_key_ids() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, ok("b 20\na 10"));
+            let report = scan_with(&base(), &[&docker], &tools);
+            assert_eq!(
+                keys(&report),
+                vec![
+                    ("containers.docker", "a".to_owned(), 10),
+                    ("containers.docker", "b".to_owned(), 20),
+                ]
+            );
+            assert_eq!(status(&report), vec![("containers.docker", ToolStatus::Ok)]);
+            let first: &ToolItem = &report.tool_items[0];
+            assert_eq!(
+                first.id,
+                ItemId::of_key(RuleId::new("containers.docker"), "a")
+            );
+            assert_eq!(first.label, "label a");
+            assert_eq!(totals(&report), vec![("containers.docker", 0, 2)]);
+            assert_eq!(tools.calls(), vec![(ToolId::Docker, DF.to_vec())]);
+        }
+
+        // FR-005
+        #[test]
+        fn provider_item_id_is_hash_of_key() {
+            let rule = RuleId::new("containers.docker");
+            assert_eq!(
+                ItemId::of_key(rule, "sha256:ab"),
+                ItemId(0xf968_1575_5be5_81cb)
+            );
+            assert_ne!(
+                ItemId::of_key(rule, "/x"),
+                ItemId::of(rule, Path::new("/x"))
+            );
+            assert_ne!(
+                ItemId::of_key(rule, "a"),
+                ItemId::of_key(RuleId::new("other"), "a")
+            );
+        }
+
+        // FR-021
+        #[test]
+        fn tool_bytes_not_in_total_bytes() {
+            let mut fs = base();
+            fs.insert(c("f"), file(1, 8));
+            let caches = rule("sys.user-caches", under(Root::Caches, ""));
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, ok("a 1000\nb 24"));
+            let report = scan_with(&fs, &[&caches, &docker], &tools);
+            assert_eq!(report.total_bytes, 8 * 512);
+            assert_eq!(report.tool_total_bytes, 1024);
+            let rule_sum: u64 = report.rules.iter().map(|r| r.allocated_bytes).sum();
+            assert_eq!(rule_sum, report.total_bytes);
+        }
+
+        // FR-022
+        #[test]
+        fn unavailable_tool_does_not_fail_scan() {
+            let mut fs = base();
+            fs.insert(c("f"), file(1, 8));
+            let caches = rule("sys.user-caches", under(Root::Caches, ""));
+            let docker = provider("containers.docker", ToolId::Docker);
+            let podman = provider("containers.podman", ToolId::Podman);
+            let tools = replying(ToolId::Podman, ok("p 5"));
+            let report = scan_with(&fs, &[&caches, &docker, &podman], &tools);
+            assert_eq!(
+                items(&report),
+                vec![("sys.user-caches", c("f"), 8 * 512, 1)]
+            );
+            assert_eq!(
+                status(&report),
+                vec![
+                    ("containers.docker", unavailable(ToolError::NotInstalled)),
+                    ("containers.podman", ToolStatus::Ok),
+                ]
+            );
+            assert_eq!(
+                keys(&report),
+                vec![("containers.podman", "p".to_owned(), 5)]
+            );
+        }
+
+        // FR-022
+        #[test]
+        fn runner_errors_are_unavailable() {
+            for error in [
+                ToolError::NotRunning,
+                ToolError::Timeout,
+                ToolError::OutputTooLarge,
+                ToolError::Denied,
+                ToolError::Io(io::ErrorKind::Other),
+            ] {
+                let docker = provider("containers.docker", ToolId::Docker);
+                let tools = replying(ToolId::Docker, FakeReply::Error(error));
+                let report = scan_with(&base(), &[&docker], &tools);
+                assert_eq!(
+                    status(&report),
+                    vec![("containers.docker", unavailable(error))],
+                    "{error:?}"
+                );
+                assert!(report.tool_items.is_empty());
+            }
+        }
+
+        // FR-022
+        #[test]
+        fn timeout_is_unavailable() {
+            let mut fs = base();
+            fs.insert(c("f"), file(1, 8));
+            let caches = rule("sys.user-caches", under(Root::Caches, ""));
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, FakeReply::Error(ToolError::Timeout));
+            let report = scan_with(&fs, &[&caches, &docker], &tools);
+            assert_eq!(
+                status(&report),
+                vec![("containers.docker", unavailable(ToolError::Timeout))]
+            );
+            assert_eq!(report.items.len(), 1);
+        }
+
+        // FR-022
+        #[test]
+        fn parse_error_is_unavailable() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, ok("a 10\nb lots"));
+            let report = scan_with(&base(), &[&docker], &tools);
+            assert_eq!(
+                status(&report),
+                vec![(
+                    "containers.docker",
+                    ToolStatus::Unavailable(Unavailable::Parse)
+                )]
+            );
+            assert!(report.tool_items.is_empty());
+            assert_eq!(report.tool_total_bytes, 0);
+        }
+
+        // FR-005
+        #[test]
+        fn duplicate_keys_are_parse_error() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, ok("a 10\na 20"));
+            let report = scan_with(&base(), &[&docker], &tools);
+            assert_eq!(
+                status(&report),
+                vec![(
+                    "containers.docker",
+                    ToolStatus::Unavailable(Unavailable::Parse)
+                )]
+            );
+            assert!(report.tool_items.is_empty());
+        }
+
+        // FR-022
+        #[test]
+        fn failed_exit_is_unavailable() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let out = ToolOutput {
+                status: ExitStatusKind::Code(1),
+                stdout: "a 10".to_owned(),
+                stderr_len: 3,
+            };
+            let tools = replying(ToolId::Docker, FakeReply::Output(out));
+            let report = scan_with(&base(), &[&docker], &tools);
+            assert_eq!(
+                status(&report),
+                vec![(
+                    "containers.docker",
+                    ToolStatus::Unavailable(Unavailable::Failed)
+                )]
+            );
+            assert!(report.tool_items.is_empty());
+        }
+
+        // FR-007
+        #[test]
+        fn protected_path_reported_by_tool_is_dropped() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8))
+                .insert(c("other"), file(12, 8))
+                .insert("/Users/Tester/.ssh", dir(13))
+                .insert("/Users/Tester/.ssh/id_ed25519", file(14, 8))
+                .insert_symlink(c("Homebrew/key"), "/Users/Tester/.ssh/id_ed25519");
+            let brew = provider("pkg.homebrew", ToolId::Brew);
+            let line = format!(
+                "x 100 {} {} /Users/Tester/.ssh/id_ed25519 {} {} relative/x",
+                c("Homebrew/old.tgz").display(),
+                c("other").display(),
+                c("Homebrew/key").display(),
+                c("Homebrew/../Homebrew/old.tgz").display(),
+            );
+            let tools = replying(ToolId::Brew, ok(&line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(report.tool_items[0].paths, vec![c("Homebrew/old.tgz")]);
+            assert_eq!(
+                report.skipped,
+                vec![
+                    Skipped {
+                        path: PathBuf::from("/Users/Tester/.ssh/id_ed25519"),
+                        reason: SkipReason::Protected,
+                    },
+                    Skipped {
+                        path: c("other"),
+                        reason: SkipReason::OutsideRoot,
+                    },
+                    Skipped {
+                        path: PathBuf::from("relative/x"),
+                        reason: SkipReason::OutsideRoot,
+                    },
+                ]
+            );
+        }
+
+        // FR-007
+        #[test]
+        fn item_with_only_refused_paths_is_dropped() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert("/Users/Tester/.ssh", dir(13))
+                .insert("/Users/Tester/.ssh/id_ed25519", file(14, 8));
+            let brew = provider("pkg.homebrew", ToolId::Brew);
+            let out = format!(
+                "x 100 /Users/Tester/.ssh/id_ed25519\ny 5 {}\nz 7",
+                c("Homebrew/gone").display()
+            );
+            let tools = replying(ToolId::Brew, ok(&out));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(keys(&report), vec![("pkg.homebrew", "z".to_owned(), 7)]);
+            assert_eq!(report.tool_total_bytes, 7);
+            assert_eq!(
+                report.skipped,
+                vec![
+                    Skipped {
+                        path: PathBuf::from("/Users/Tester/.ssh/id_ed25519"),
+                        reason: SkipReason::Protected,
+                    },
+                    Skipped {
+                        path: c("Homebrew/gone"),
+                        reason: SkipReason::NotFound,
+                    },
+                ]
+            );
+        }
+
+        // FR-007
+        #[test]
+        fn provider_without_roots_keeps_no_path() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8));
+            let mut brew = provider("pkg.homebrew", ToolId::Brew);
+            brew.roots = Vec::new();
+            let out = format!("x 100 {}", c("Homebrew/old.tgz").display());
+            let tools = replying(ToolId::Brew, ok(&out));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert!(report.tool_items.is_empty());
+            assert_eq!(
+                report.skipped,
+                vec![Skipped {
+                    path: c("Homebrew/old.tgz"),
+                    reason: SkipReason::OutsideRoot,
+                }]
+            );
+        }
+
+        // FR-011
+        #[test]
+        fn cancel_while_tool_runs_is_error() {
+            let mut fs = base();
+            fs.insert(c("x"), file(240, 8));
+            let caches = CancelsInVisit(rule("sys.user-caches", under(Root::Caches, "")));
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, FakeReply::WaitForCancel);
+            let flag = AtomicBool::new(false);
+            assert_eq!(
+                run_full(&fs, &[&caches, &docker], &flag, Some(2), &tools),
+                Err(ScanError::Cancelled)
+            );
+        }
+
+        // FR-011
+        #[test]
+        fn tool_cancelled_is_error() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, FakeReply::Error(ToolError::Cancelled));
+            assert_eq!(
+                run_full(&base(), &[&docker], &AtomicBool::new(false), None, &tools),
+                Err(ScanError::Cancelled)
+            );
+        }
+
+        // FR-011
+        #[test]
+        fn cancelled_before_start_runs_no_tool() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let tools = replying(ToolId::Docker, ok("a 1"));
+            assert_eq!(
+                run_full(&base(), &[&docker], &AtomicBool::new(true), None, &tools),
+                Err(ScanError::Cancelled)
+            );
+            assert!(tools.calls().is_empty());
+        }
+
+        #[derive(Default)]
+        struct ThreadSpy(Mutex<Vec<ThreadId>>);
+
+        impl ToolRunner for ThreadSpy {
+            fn run(&self, _: &ToolCall, _: &AtomicBool) -> Result<ToolOutput, ToolError> {
+                if let Ok(mut seen) = self.0.lock() {
+                    seen.push(std::thread::current().id());
+                }
+                Ok(ToolOutput::success(""))
+            }
+        }
+
+        // FR-022
+        #[test]
+        fn providers_run_on_separate_thread() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let spy = ThreadSpy::default();
+            let report = scan_with(&base(), &[&docker], &spy);
+            assert_eq!(status(&report), vec![("containers.docker", ToolStatus::Ok)]);
+            let seen = spy.0.lock().map(|s| s.clone()).unwrap_or_default();
+            assert_eq!(seen.len(), 1);
+            assert_ne!(seen[0], std::thread::current().id());
+        }
+
+        // FR-010
+        #[test]
+        fn providers_sorted_by_rule() {
+            let z = provider("z.tool", ToolId::Docker);
+            let a = provider("a.tool", ToolId::Ollama);
+            let tools = replying(ToolId::Docker, ok("k 1"));
+            let report = scan_with(&base(), &[&z, &a], &tools);
+            assert_eq!(
+                status(&report),
+                vec![
+                    ("a.tool", unavailable(ToolError::NotInstalled)),
+                    ("z.tool", ToolStatus::Ok),
+                ]
+            );
+            assert_eq!(scan_with(&base(), &[&z, &a], &tools), report);
+        }
+
+        // FR-022
+        #[test]
+        fn provider_does_not_act() {
+            let docker = provider("containers.docker", ToolId::Docker);
+            let item = ProviderItem {
+                key: "a".to_owned(),
+                label: String::new(),
+                reported_bytes: 0,
+                paths: Vec::new(),
+            };
+            assert_eq!(docker.act(&item), None);
+        }
     }
 }

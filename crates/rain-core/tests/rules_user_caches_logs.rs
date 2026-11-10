@@ -75,6 +75,7 @@ fn fixture_children_are_items() {
             user_paths: Vec::new(),
             now: SystemTime::now(),
         },
+        tools: &rain_core::tools::NoTools,
         threads: None,
     };
     let selected = rules::select(&["sys.user-caches", "sys.logs"]).unwrap();

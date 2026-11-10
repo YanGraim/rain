@@ -185,10 +185,13 @@ fn run(rule: &dyn Rule) -> (Vec<Violation>, Option<ScanReport>) {
     bait.dir(&home.join("Library/Keychains"), None);
     bait.file(&home.join("Library/Keychains/login.keychain-db"));
 
-    let RuleKind::Files(files) = rule.kind();
+    let rule_roots = match rule.kind() {
+        RuleKind::Files(files) => files.roots(&rule_ctx),
+        RuleKind::Provider(provider) => provider.roots(),
+    };
     let mut violations = Vec::new();
     let mut planted = Vec::new();
-    for rooted in files.roots(&rule_ctx) {
+    for rooted in rule_roots {
         let root = match base(&rooted, &roots) {
             Ok(root) => root,
             Err(invalid) => {
@@ -218,6 +221,7 @@ fn run(rule: &dyn Rule) -> (Vec<Violation>, Option<ScanReport>) {
         protect: &protect,
         roots: &roots,
         rule_ctx,
+        tools: &crate::tools::NoTools,
         threads: Some(1),
     };
     let report = scan(&[rule], &ctx, &AtomicBool::new(false)).ok();
@@ -443,6 +447,7 @@ mod tests {
                 user_paths: Vec::new(),
                 now: SystemTime::UNIX_EPOCH,
             },
+            tools: &crate::tools::NoTools,
             threads: Some(2),
         };
         for rule in [

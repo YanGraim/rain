@@ -58,8 +58,6 @@ pub struct ItemId(pub u64);
 
 impl ItemId {
     pub fn of(rule: RuleId, path: &Path) -> Self {
-        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const PRIME: u64 = 0x0000_0100_0000_01b3;
         let bytes = rule
             .as_str()
             .as_bytes()
@@ -67,8 +65,78 @@ impl ItemId {
             // NUL separates the parts: it cannot occur in a path.
             .chain(std::iter::once(&0u8))
             .chain(path.as_os_str().as_encoded_bytes());
-        Self(bytes.fold(OFFSET, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME)))
+        Self(fnv1a(bytes))
     }
+
+    /// Id of a tool item: `(rule id, tool key)`. A second NUL keeps it apart
+    /// from every path id, since a path never starts with NUL.
+    pub fn of_key(rule: RuleId, key: &str) -> Self {
+        let bytes = rule
+            .as_str()
+            .as_bytes()
+            .iter()
+            .chain([0u8, 0u8].iter())
+            .chain(key.as_bytes());
+        Self(fnv1a(bytes))
+    }
+}
+
+fn fnv1a<'a>(bytes: impl Iterator<Item = &'a u8>) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.fold(OFFSET, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
+}
+
+/// Where an item comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ItemSource {
+    Files,
+    Tool,
+}
+
+/// One item reported by an external tool (ADR 0004). Its bytes are the
+/// tool's figure and never enter `total_bytes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolItem {
+    pub id: ItemId,
+    pub rule: RuleId,
+    pub key: String,
+    /// Untrusted text from the tool.
+    pub label: String,
+    pub reported_bytes: u64,
+    /// Canonical, unprotected paths inside the rule's roots.
+    pub paths: Vec<PathBuf>,
+}
+
+impl ToolItem {
+    pub const SOURCE: ItemSource = ItemSource::Tool;
+}
+
+impl ScanItem {
+    pub const SOURCE: ItemSource = ItemSource::Files;
+}
+
+/// Why a provider gave no items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Unavailable {
+    Tool(crate::tools::ToolError),
+    /// The tool exited with a failure status.
+    Failed,
+    /// The output did not match the expected format.
+    Parse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolStatus {
+    Ok,
+    Unavailable(Unavailable),
+}
+
+/// FR-022: one entry per provider rule that ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProviderStatus {
+    pub rule: RuleId,
+    pub status: ToolStatus,
 }
 
 /// One candidate found by a rule. Items are disjoint: no byte is counted in
@@ -107,6 +175,12 @@ pub struct ScanReport {
     pub items: Vec<ScanItem>,
     /// Sorted by `(path, reason)`, no duplicates.
     pub skipped: Vec<Skipped>,
-    /// Sum of all items, equal to the sum of all rules.
+    /// Sum of all file items, equal to the sum of all rules.
     pub total_bytes: u64,
+    /// Sorted by `(rule, key)`.
+    pub tool_items: Vec<ToolItem>,
+    /// Sorted by rule id.
+    pub providers: Vec<ProviderStatus>,
+    /// Sum of `reported_bytes` of all tool items.
+    pub tool_total_bytes: u64,
 }

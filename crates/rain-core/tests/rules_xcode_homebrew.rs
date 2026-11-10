@@ -81,6 +81,7 @@ fn fixture_items_for_xcode_and_homebrew() {
             user_paths: Vec::new(),
             now: SystemTime::UNIX_EPOCH,
         },
+        tools: &rain_core::tools::NoTools,
         threads: Some(2),
     };
     let selected = rules::select(&["apple.derived-data", "pkg.homebrew"]).unwrap();

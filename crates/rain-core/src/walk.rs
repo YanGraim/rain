@@ -31,6 +31,8 @@ pub enum SkipReason {
     /// A rule root that is not a plain relative path below its base
     /// (absolute, `.`, `..`): refused before any read.
     InvalidRoot,
+    /// A path named by a tool outside the roots its rule declares.
+    OutsideRoot,
     /// Any other read error, kept with its kind so it is never silent.
     Io(io::ErrorKind),
 }

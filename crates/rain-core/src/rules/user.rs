@@ -133,6 +133,7 @@ mod tests {
                 // Every fixture entry was modified at day 100.
                 now: SystemTime::UNIX_EPOCH + Duration::from_secs(101 * DAY),
             },
+            tools: &crate::tools::NoTools,
             threads: Some(1),
         };
         match scan(rules, &ctx, &AtomicBool::new(false)) {

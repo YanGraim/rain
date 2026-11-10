@@ -123,6 +123,7 @@ fn run_scan(
             user_paths,
             now: env.clock.now(),
         },
+        tools: &rain_core::tools::NoTools,
         threads: None,
     };
     planner::scan(&selected, &ctx, cancel).map_err(|e| match e {

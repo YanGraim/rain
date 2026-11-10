@@ -125,6 +125,7 @@ mod tests {
                 user_paths: Vec::new(),
                 now: SystemTime::UNIX_EPOCH,
             },
+            tools: &crate::tools::NoTools,
             threads: Some(1),
         };
         match scan(rules, &ctx, &AtomicBool::new(false)) {

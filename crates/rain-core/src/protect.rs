@@ -947,6 +947,7 @@ mod caches_tests {
                 user_paths: Vec::new(),
                 now: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400),
             },
+            tools: &crate::tools::NoTools,
             threads: Some(1),
         };
         let selected = match rules::select(&["sys.user-caches"]) {
@@ -1137,6 +1138,7 @@ mod engines_tests {
                 user_paths: vec![target.to_path_buf()],
                 now: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400),
             },
+            tools: &crate::tools::NoTools,
             threads: Some(1),
         };
         let selected = match rules::select(&["proj.node-modules"]) {
