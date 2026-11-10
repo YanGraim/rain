@@ -3,6 +3,7 @@
 use crate::fs::{Fs, Metadata};
 use crate::model::{Category, Risk, RuleId};
 use crate::protect::ProtectList;
+use crate::tools::{ParseError, ProviderItem, ToolCall, ToolOutput};
 use rain_platform::{Os, Root};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -25,10 +26,11 @@ pub struct RuleMeta {
     pub os: &'static [Os],
 }
 
-/// Extension point: rule families. `Provider` (act through an external
-/// tool, e.g. Docker) is reserved for later (ADR 0004).
+/// Rule families: files found by walking, or items reported by an
+/// external tool (ADR 0004).
 pub enum RuleKind<'a> {
     Files(&'a dyn FileRule),
+    Provider(&'a dyn ProviderRule),
 }
 
 pub trait Rule: Send + Sync {
@@ -87,4 +89,19 @@ pub trait FileRule: Send + Sync {
     fn roots(&self, ctx: &RuleContext) -> Vec<RootedPath>;
     /// `depth` is 0 for the root itself.
     fn visit(&self, entry: &EntryInfo, depth: usize, ctx: &RuleContext, fs: &dyn Fs) -> Visit;
+}
+
+/// A rule that asks an official tool what exists. It only describes
+/// commands and reads their output; it never runs anything.
+pub trait ProviderRule: Send + Sync {
+    /// Read-only command with a fixed argv.
+    fn probe(&self) -> ToolCall;
+    /// Pure and strict: output it does not fully understand is an error.
+    fn parse(&self, out: &ToolOutput) -> Result<Vec<ProviderItem>, ParseError>;
+    /// M2: the command that removes one item; `None` only reports.
+    fn act(&self, item: &ProviderItem) -> Option<ToolCall>;
+    /// Where paths named by the tool must live; any other path is dropped.
+    fn roots(&self) -> Vec<RootedPath> {
+        Vec::new()
+    }
 }

@@ -59,6 +59,7 @@ fn user_caches_skips_protected_caches_on_real_fs() {
             user_paths: Vec::new(),
             now: SystemTime::now(),
         },
+        tools: &rain_core::tools::NoTools,
         threads: None,
     };
     let selected = rules::select(&["sys.user-caches"]).unwrap();

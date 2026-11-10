@@ -161,6 +161,7 @@ mod tests {
                 user_paths: Vec::new(),
                 now: SystemTime::UNIX_EPOCH + Duration::from_secs(101 * DAY),
             },
+            tools: &crate::tools::NoTools,
             threads: Some(1),
         };
         match scan(&[rule], &ctx, &AtomicBool::new(false)) {
@@ -338,7 +339,9 @@ mod tests {
     /// Problems in one rule's roots: identical or nested `rels`, and a
     /// whole-root item at `""`.
     fn root_problems(rule: &dyn Rule) -> Vec<String> {
-        let RuleKind::Files(files) = rule.kind();
+        let RuleKind::Files(files) = rule.kind() else {
+            return Vec::new();
+        };
         let ctx = RuleContext {
             min_age_days: 0,
             user_paths: Vec::new(),

@@ -220,6 +220,7 @@ fn reason_str(r: SkipReason) -> String {
         SkipReason::OtherVolume => "other-volume",
         SkipReason::NotFound => "not-found",
         SkipReason::InvalidRoot => "invalid-root",
+        SkipReason::OutsideRoot => "outside-root",
         SkipReason::Io(kind) => return format!("io:{}", io_kind_str(kind)),
     };
     fixed.to_owned()
@@ -308,6 +309,9 @@ mod tests {
             items,
             skipped,
             total_bytes: 1_200_004_096,
+            tool_items: Vec::new(),
+            providers: Vec::new(),
+            tool_total_bytes: 0,
         }
     }
 
