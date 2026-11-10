@@ -12,6 +12,7 @@ mod models;
 mod node_modules;
 mod pkg;
 mod proj;
+mod project;
 mod sys;
 mod user;
 
