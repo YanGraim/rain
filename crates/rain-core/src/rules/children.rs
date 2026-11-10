@@ -334,4 +334,109 @@ mod tests {
         assert!(items(&home).is_empty());
         assert_eq!(skips(&home), vec![(h(""), SkipReason::Protected)]);
     }
+
+    /// Problems in one rule's roots: identical or nested `rels`, and a
+    /// whole-root item at `""`.
+    fn root_problems(rule: &dyn Rule) -> Vec<String> {
+        let RuleKind::Files(files) = rule.kind();
+        let ctx = RuleContext {
+            min_age_days: 0,
+            user_paths: Vec::new(),
+            now: SystemTime::UNIX_EPOCH,
+        };
+        let rels: Vec<(Root, &str)> = files
+            .roots(&ctx)
+            .into_iter()
+            .filter_map(|r| match r {
+                RootedPath::Under(root, rel) => Some((root, rel)),
+                RootedPath::User(_) => None,
+            })
+            .collect();
+        let id = rule.meta().id;
+        let mut out = Vec::new();
+        for (i, (ra, a)) in rels.iter().enumerate() {
+            for (rb, b) in rels.iter().skip(i + 1) {
+                if ra == rb && (Path::new(a).starts_with(b) || Path::new(b).starts_with(a)) {
+                    out.push(format!("{id}: {a:?} and {b:?} overlap"));
+                }
+            }
+        }
+        let protect = match ProtectList::builtin(&HomeAt) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        };
+        let cancel = AtomicBool::new(false);
+        let dir = md(true, 1, 0);
+        let entry = EntryInfo {
+            path: Path::new(HOME),
+            meta: &dir,
+            protect: &protect,
+            cancel: &cancel,
+        };
+        let whole_root = matches!(
+            files.visit(&entry, 0, &ctx, &FakeFs::new()),
+            Visit::Candidate
+        );
+        if whole_root && rels.iter().any(|(_, rel)| rel.is_empty()) {
+            out.push(format!("{id}: \"\" as a whole item"));
+        }
+        out
+    }
+
+    // FR-005: ADR 0005 keeps the outer of two nested roots of one rule, so a
+    // protected outer root would hide the inner one. Built-in rules must not
+    // nest or repeat `rels`, and never take a whole base root as one item.
+    #[test]
+    fn builtin_rels_never_overlap() {
+        let problems: Vec<String> = super::super::builtin()
+            .iter()
+            .flat_map(|r| root_problems(*r))
+            .collect();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    // FR-005: the check above goes red on each bad shape.
+    #[test]
+    fn overlap_check_catches_bad_rels() {
+        static SAME: ChildrenOf = ChildrenOf {
+            meta: meta("bad.same"),
+            root: Root::Home,
+            rels: &[".a", ".a"],
+            depth: 1,
+        };
+        static NESTED: ChildrenOf = ChildrenOf {
+            meta: meta("bad.nested"),
+            root: Root::Home,
+            rels: &[".a/b", ".a"],
+            depth: 1,
+        };
+        static EMPTY_PREFIX: DirItself = DirItself {
+            meta: meta("bad.empty-prefix"),
+            root: Root::Home,
+            rels: &[".a", ""],
+        };
+        static WHOLE: DirItself = DirItself {
+            meta: meta("bad.whole"),
+            root: Root::Home,
+            rels: &[""],
+        };
+        static TEXT_PREFIX_OK: ChildrenOf = ChildrenOf {
+            meta: meta("ok.text-prefix"),
+            root: Root::Home,
+            rels: &[".a", ".ab"],
+            depth: 1,
+        };
+        static EMPTY_CHILDREN_OK: ChildrenOf = ChildrenOf {
+            meta: meta("ok.empty-children"),
+            root: Root::Home,
+            rels: &[""],
+            depth: 1,
+        };
+        assert_eq!(root_problems(&SAME).len(), 1);
+        assert_eq!(root_problems(&NESTED).len(), 1);
+        assert_eq!(root_problems(&EMPTY_PREFIX).len(), 2);
+        assert_eq!(root_problems(&WHOLE).len(), 1);
+        assert!(root_problems(&TEXT_PREFIX_OK).is_empty());
+        assert!(root_problems(&EMPTY_CHILDREN_OK).is_empty());
+    }
 }
