@@ -34,7 +34,7 @@
   "error.unsupported-os": "This operating system is not supported yet.",
   "error.render-json": "Could not write the JSON report: {reason}",
   "rule.ai.claude-code.cache": "Claude Code: caches and snapshots",
-  "rule.ai.claude-code.cache.consequence": "Claude Code recreates these on its own. Your sessions and history are not touched.",
+  "rule.ai.claude-code.cache.consequence": "Claude Code recreates these on its own. Pasted content is lost when you resume old conversations. Your sessions and history are not touched.",
   "rule.ai.claude-code.logs": "Claude Code: debug logs",
   "rule.ai.claude-code.logs.consequence": "You lose old debug logs. Claude Code keeps working normally.",
   "rule.ai.cursor.cache": "Cursor: cache",
