@@ -8,8 +8,10 @@ publish = false
 
 [dependencies]
 
-[target.'cfg(target_os = "macos")'.dependencies]
-# Safe access to the process uids; no `unsafe` on our side.
+[target.'cfg(unix)'.dependencies]
+# Safe access to the process uids and to process-group kill (tool runner);
+# no `unsafe` on our side. Already in the tree; only widened from macOS to unix
+# so the runner builds and is tested on Linux CI.
 rustix = { version = "1", default-features = false, features = ["process"] }
 
 [dev-dependencies]
