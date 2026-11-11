@@ -72,3 +72,17 @@
 ~/Library/Application Support/Ethereum
 ~/Library/Application Support/Electrum
 ~/Library/Application Support/Exodus
+
+# Claude Code user data: config, credentials, sessions and history.
+# ~/.claude itself stays open so the cache and debug log rules still work.
+~/.claude.json
+~/.claude/.credentials.json
+~/.claude/settings.json
+~/.claude/settings.local.json
+~/.claude/projects
+~/.claude/history.jsonl
+~/.claude/todos
+~/.claude/file-history
+~/.claude/sessions
+~/.claude/plans
+~/.claude/backups
