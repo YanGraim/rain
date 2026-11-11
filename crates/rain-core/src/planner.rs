@@ -1073,6 +1073,44 @@ mod tests {
         assert_eq!(report.total_bytes, 2 * 512);
     }
 
+    // FR-007: the inner item of another rule holds a dev+ino alias of
+    // `~/.ssh`; the outer item would take it along, so both are refused,
+    // listed as Skipped(Protected) and left out of the totals.
+    #[test]
+    fn outer_item_of_refused_nested_item_is_refused() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.ssh", dir(10))
+            .insert("/Users/Tester/.ssh/id_ed25519", file(11, 8))
+            .insert(c("X"), dir(230))
+            .insert(c("X/f"), file(231, 8))
+            .insert(c("X/Y"), dir(232))
+            .insert(c("X/Y/g"), file(233, 8))
+            .insert(c("X/Y/.ssh"), dir(10))
+            .insert(c("X/Y/.ssh/id_ed25519"), file(11, 8))
+            .insert(c("other"), file(234, 2));
+        let inner = rule("test.inner", under(Root::Caches, "X"));
+        let outer = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&inner, &outer]);
+
+        assert_eq!(
+            items(&report),
+            vec![
+                ("macos.user.caches", c("other"), 2 * 512, 1),
+                ("test.inner", c("X/f"), 8 * 512, 1),
+            ]
+        );
+        for path in [c("X"), c("X/Y")] {
+            assert!(
+                report.skipped.contains(&Skipped {
+                    path: path.clone(),
+                    reason: SkipReason::Protected,
+                }),
+                "{path:?}"
+            );
+        }
+        assert_eq!(report.total_bytes, 10 * 512);
+    }
+
     // FR-004: a candidate that cannot be listed is not an item; it shows up
     // only in skipped, and its rule has 0 items.
     #[test]
