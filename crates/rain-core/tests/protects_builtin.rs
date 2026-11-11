@@ -30,6 +30,14 @@ fn protects_pkg_js_caches() {
 
 // NFR-005, FR-007
 #[test]
+fn protects_pkg_python_caches() {
+    for id in ["pkg.pip", "pkg.uv", "pkg.poetry"] {
+        protects(id);
+    }
+}
+
+// NFR-005, FR-007
+#[test]
 fn protects_ai_claude_code_cache() {
     protects("ai.claude-code.cache");
 }
