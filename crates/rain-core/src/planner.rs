@@ -105,16 +105,8 @@ fn scan_files(
         }
         // A root that could not be opened or listed is not an item.
         let unmeasured = m.skipped.iter().any(|s| &s.path == path);
-        // FR-007: a protected entry inside (e.g. a dev+ino alias) would go
-        // to the Trash with the item, so the whole item is refused.
-        let holds_protected = m.skipped.iter().any(|s| s.reason == SkipReason::Protected);
         skipped.extend(m.skipped);
-        if holds_protected && !unmeasured {
-            skipped.insert(Skipped {
-                path: path.clone(),
-                reason: SkipReason::Protected,
-            });
-        } else if !unmeasured {
+        if !unmeasured {
             items.push(ScanItem {
                 id: ItemId::of(rule, path),
                 rule,
@@ -124,7 +116,31 @@ fn scan_files(
             });
         }
     }
+    let items = refuse_holders_of_protected(items, &mut skipped);
     Ok((items, skipped))
+}
+
+/// FR-007: an item that is or contains a protected hit (e.g. a dev+ino
+/// alias skipped while measuring, even one inside a nested item of another
+/// rule) would take it to the Trash, so it is refused whole. Containment is
+/// transitive, so one pass over every hit covers outer items too.
+fn refuse_holders_of_protected(
+    items: Vec<ScanItem>,
+    skipped: &mut BTreeSet<Skipped>,
+) -> Vec<ScanItem> {
+    let hits: Vec<PathBuf> = skipped
+        .iter()
+        .filter(|s| s.reason == SkipReason::Protected)
+        .map(|s| s.path.clone())
+        .collect();
+    let (refused, kept): (Vec<_>, Vec<_>) = items
+        .into_iter()
+        .partition(|item| hits.iter().any(|h| h.starts_with(&item.path)));
+    skipped.extend(refused.into_iter().map(|item| Skipped {
+        path: item.path,
+        reason: SkipReason::Protected,
+    }));
+    kept
 }
 
 /// Phase 1: candidate path -> index of the highest-priority rule that found
