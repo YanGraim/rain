@@ -390,6 +390,7 @@ mod tests {
                 "pkg.poetry",
                 "pkg.homebrew",
                 "apple.derived-data",
+                "sys.sensitive-caches",
                 "sys.logs",
                 "sys.user-caches",
                 "proj.rust-target",

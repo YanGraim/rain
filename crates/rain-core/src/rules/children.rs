@@ -43,7 +43,6 @@ impl FileRule for ChildrenOf {
 }
 
 /// A rule whose items are the folders `Under(root, rel)` themselves.
-#[allow(dead_code)]
 pub struct DirItself {
     pub(super) meta: RuleMeta,
     pub(super) root: Root,
