@@ -459,15 +459,20 @@ mod tests {
         assert_eq!(*fs.on_symlink.lock().unwrap(), Vec::<PathBuf>::new());
     }
 
-    // NFR-005, FR-007: taking a whole folder that holds an alias of a
-    // protected folder fails, even though the scan skipped the alias.
+    // NFR-005, FR-007: a folder that holds an alias of a protected folder
+    // is refused whole by the planner, so the testkit sees no violation.
     #[test]
-    fn testkit_catches_item_holding_protected_alias() {
+    fn testkit_bait_alias_item_is_refused_by_planner() {
         let root = Path::new(HOME).join("Library/Caches/App");
-        assert_eq!(
-            check_rule_protects(&takes("Library/Caches/App")),
-            Err(vec![Violation::ProtectedItem(root)])
-        );
+        let rule = takes("Library/Caches/App");
+        assert_eq!(check_rule_protects(&rule), Ok(()));
+        let (_, report) = run(&rule);
+        let report = report.unwrap();
+        assert!(report.items.is_empty());
+        assert!(report.skipped.contains(&crate::model::Skipped {
+            path: root,
+            reason: SkipReason::Protected,
+        }));
     }
 
     // NFR-005, FR-004, FR-007: every built-in rule passes.

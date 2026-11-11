@@ -105,8 +105,16 @@ fn scan_files(
         }
         // A root that could not be opened or listed is not an item.
         let unmeasured = m.skipped.iter().any(|s| &s.path == path);
+        // FR-007: a protected entry inside (e.g. a dev+ino alias) would go
+        // to the Trash with the item, so the whole item is refused.
+        let holds_protected = m.skipped.iter().any(|s| s.reason == SkipReason::Protected);
         skipped.extend(m.skipped);
-        if !unmeasured {
+        if holds_protected && !unmeasured {
+            skipped.insert(Skipped {
+                path: path.clone(),
+                reason: SkipReason::Protected,
+            });
+        } else if !unmeasured {
             items.push(ScanItem {
                 id: ItemId::of(rule, path),
                 rule,
@@ -1020,6 +1028,33 @@ mod tests {
         fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
             self.0.canonicalize(p)
         }
+    }
+
+    // FR-007, NFR-005: an item whose measurement skipped a protected entry
+    // (here an alias with the same dev+ino as `~/.ssh`) is refused whole and
+    // shows up as Skipped(Protected); its other files are not taken either.
+    #[test]
+    fn item_holding_protected_alias_is_refused() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.ssh", dir(10))
+            .insert("/Users/Tester/.ssh/id_ed25519", file(11, 8))
+            .insert(c("app"), dir(220))
+            .insert(c("app/x"), file(221, 8))
+            .insert(c("app/.ssh"), dir(10))
+            .insert(c("app/.ssh/id_ed25519"), file(11, 8))
+            .insert(c("other"), file(222, 2));
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&caches]);
+
+        assert_eq!(
+            items(&report),
+            vec![("macos.user.caches", c("other"), 2 * 512, 1)]
+        );
+        assert!(report.skipped.contains(&Skipped {
+            path: c("app"),
+            reason: SkipReason::Protected,
+        }));
+        assert_eq!(report.total_bytes, 2 * 512);
     }
 
     // FR-004: a candidate that cannot be listed is not an item; it shows up
