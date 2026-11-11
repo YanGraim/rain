@@ -1295,6 +1295,60 @@ mod engines_tests {
         assert_engine_protected(".claude/backups");
     }
 
+    // FR-007
+    #[test]
+    fn claude_md_is_protected() {
+        assert_engine_protected(".claude/CLAUDE.md");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_agents_is_protected() {
+        assert_engine_protected(".claude/agents");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_commands_is_protected() {
+        assert_engine_protected(".claude/commands");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_skills_is_protected() {
+        assert_engine_protected(".claude/skills");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_plugins_is_protected() {
+        assert_engine_protected(".claude/plugins");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_hooks_is_protected() {
+        assert_engine_protected(".claude/hooks");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_output_styles_is_protected() {
+        assert_engine_protected(".claude/output-styles");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_session_env_is_protected() {
+        assert_engine_protected(".claude/session-env");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_json_backup_is_protected() {
+        assert_engine_protected(".claude.json.backup");
+    }
+
     // FR-007: the user data entries must not shadow the cache rules.
     #[test]
     fn claude_root_is_not_protected_and_cache_rules_still_find_items() {
@@ -1321,6 +1375,8 @@ mod engines_tests {
             ".claude/debug",
             ".claude/projects",
             ".claude/todos",
+            ".claude/agents",
+            ".claude/commands",
             "Library",
             "Library/Caches",
             "Library/Logs",
@@ -1337,6 +1393,9 @@ mod engines_tests {
             ".claude/history.jsonl",
             ".claude/settings.json",
             ".claude.json",
+            ".claude/CLAUDE.md",
+            ".claude/agents/a.md",
+            ".claude/commands/c.md",
         ] {
             add(&mut fs, f, false);
         }
@@ -1380,5 +1439,13 @@ mod engines_tests {
         .collect();
         want.sort();
         assert_eq!(paths, want, "{:?}", report.skipped);
+        for bait in [".claude/CLAUDE.md", ".claude/agents", ".claude/commands"] {
+            let bait = home.join(bait);
+            assert!(
+                !report.items.iter().any(|i| i.path.starts_with(&bait)),
+                "{} became an item",
+                bait.display()
+            );
+        }
     }
 }
