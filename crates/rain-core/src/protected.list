@@ -86,3 +86,13 @@
 ~/.claude/sessions
 ~/.claude/plans
 ~/.claude/backups
+# User-authored instructions, agents, commands, skills, plugins and hooks.
+~/.claude/CLAUDE.md
+~/.claude/agents
+~/.claude/commands
+~/.claude/skills
+~/.claude/plugins
+~/.claude/hooks
+~/.claude/output-styles
+~/.claude/session-env
+~/.claude.json.backup
