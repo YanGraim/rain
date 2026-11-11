@@ -8,6 +8,8 @@ use std::path::PathBuf;
 mod home;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(unix)]
+mod tools;
 
 #[cfg(any(test, feature = "testing"))]
 mod fake;
@@ -16,6 +18,8 @@ mod fake;
 pub use fake::FakePlatform;
 #[cfg(target_os = "macos")]
 pub use macos::{MacPlatform, ProcessEnv, RealProcessEnv};
+#[cfg(unix)]
+pub use tools::{ProcessToolRunner, RunError, RunOutput, RunRequest, Tool, MAX_STDOUT_BYTES};
 
 /// Crate version, shared across the workspace.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
