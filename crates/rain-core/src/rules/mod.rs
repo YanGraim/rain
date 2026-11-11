@@ -392,6 +392,7 @@ mod tests {
                 "apple.derived-data",
                 "sys.logs",
                 "sys.user-caches",
+                "proj.rust-target",
                 "proj.node-modules",
             ]
         );

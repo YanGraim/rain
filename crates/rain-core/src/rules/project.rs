@@ -278,4 +278,23 @@ mod tests {
         fs.insert("/h/p/src.rs", aged(false, 6, 60));
         assert_eq!(visit_target(&fs, 0, &TARGET), Visit::Skip);
     }
+
+    // FR-005, FR-016: a marker that is a folder or a symlink is not a project.
+    #[test]
+    fn marker_that_is_a_folder_or_a_symlink_is_rejected() {
+        let mut fs = FakeFs::new();
+        fs.insert("/h", aged(true, 1, 200))
+            .insert("/h/p", aged(true, 2, 100))
+            .insert("/h/p/target", aged(true, 3, 0))
+            .insert("/h/p/Cargo.toml", aged(true, 4, 100));
+        assert_eq!(visit_target(&fs, 0, &TARGET), Visit::Skip);
+        let link = Metadata {
+            is_symlink: true,
+            ..aged(false, 4, 100)
+        };
+        fs.insert("/h/p/Cargo.toml", link);
+        assert_eq!(visit_target(&fs, 0, &TARGET), Visit::Skip);
+        fs.insert("/h/p/Cargo.toml", aged(false, 4, 100));
+        assert_eq!(visit_target(&fs, 0, &TARGET), Visit::Candidate);
+    }
 }
