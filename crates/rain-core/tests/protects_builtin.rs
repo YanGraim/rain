@@ -30,6 +30,18 @@ fn protects_pkg_js_caches() {
 
 // NFR-005, FR-007
 #[test]
+fn protects_ai_claude_code_cache() {
+    protects("ai.claude-code.cache");
+}
+
+// NFR-005, FR-007
+#[test]
+fn protects_ai_claude_code_logs() {
+    protects("ai.claude-code.logs");
+}
+
+// NFR-005, FR-007
+#[test]
 fn protects_registry_covers_every_rule() {
     for rule in rules::builtin() {
         assert_rule_protects(*rule);
