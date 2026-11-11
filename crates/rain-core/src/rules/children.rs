@@ -42,6 +42,36 @@ impl FileRule for ChildrenOf {
     }
 }
 
+/// A rule that lists only the sub-folders directly below each
+/// `Under(root, rel)`; plain files there (often credentials) are skipped.
+pub struct ChildDirsOf {
+    pub(super) meta: RuleMeta,
+    pub(super) root: Root,
+    pub(super) rels: &'static [&'static str],
+}
+
+impl Rule for ChildDirsOf {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Files(self)
+    }
+}
+
+impl FileRule for ChildDirsOf {
+    fn roots(&self, _: &RuleContext) -> Vec<RootedPath> {
+        rooted(self.root, self.rels)
+    }
+    fn visit(&self, entry: &EntryInfo, depth: usize, _: &RuleContext, _: &dyn Fs) -> Visit {
+        match depth {
+            0 => Visit::Descend,
+            _ if entry.meta.is_dir => Visit::Candidate,
+            _ => Visit::Skip,
+        }
+    }
+}
+
 /// A rule whose items are the folders `Under(root, rel)` themselves.
 pub struct DirItself {
     pub(super) meta: RuleMeta,

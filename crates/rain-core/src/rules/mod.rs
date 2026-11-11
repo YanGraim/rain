@@ -277,11 +277,14 @@ mod tests {
         let others = builtin()
             .iter()
             // FR-015: the Cursor and Windsurf rules are covered in
-            // `tests/rules_ai_cursor.rs`.
+            // `tests/rules_ai_cursor.rs` and `tests/rules_ai_tools.rs`.
             .filter(|r| {
                 !matches!(
                     r.meta().id.as_str(),
-                    "apple.derived-data" | "ai.cursor.cache" | "ai.windsurf.cache"
+                    "apple.derived-data"
+                        | "ai.cursor.cache"
+                        | "ai.cursor.workspace-storage"
+                        | "ai.windsurf.cache"
                 )
             });
         for rule in others {
@@ -381,6 +384,12 @@ mod tests {
                 "ai.claude-code.logs",
                 "ai.cursor.cache",
                 "ai.windsurf.cache",
+                "ai.cursor.workspace-storage",
+                "ai.codex.cache",
+                "ai.gemini.cache",
+                "ai.continue.cache",
+                "ai.aider.cache",
+                "ai.copilot.cache",
                 "pkg.npm",
                 "pkg.yarn",
                 "pkg.bun",
