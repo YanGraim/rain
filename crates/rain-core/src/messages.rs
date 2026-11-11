@@ -722,4 +722,24 @@ mod tests {
         assert!(placeholders(text).contains("size"), "lacks {{size}}");
         assert!(text.contains("next install"), "lacks next install");
     }
+
+    // FR-002: losing the paste cache matters when resuming old chats.
+    #[test]
+    fn claude_cache_consequence_mentions_pasted_content_in_all_locales() {
+        for (locale, word) in [
+            (Locale::En, "pasted"),
+            (Locale::Es, "pegado"),
+            (Locale::PtBr, "colado"),
+        ] {
+            let catalog = Catalog::for_locale(locale).unwrap();
+            let text = catalog
+                .text("rule.ai.claude-code.cache.consequence")
+                .unwrap_or_default();
+            assert!(
+                text.to_lowercase().contains(word),
+                "{}: {text}",
+                locale.tag()
+            );
+        }
+    }
 }

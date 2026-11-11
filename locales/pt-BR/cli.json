@@ -34,7 +34,7 @@
   "error.unsupported-os": "Este sistema operacional ainda não é suportado.",
   "error.render-json": "Não foi possível gerar o relatório JSON: {reason}",
   "rule.ai.claude-code.cache": "Claude Code: caches e snapshots",
-  "rule.ai.claude-code.cache.consequence": "O Claude Code recria esses arquivos sozinho. Suas sessões e histórico não são tocados.",
+  "rule.ai.claude-code.cache.consequence": "O Claude Code recria esses arquivos sozinho. O conteúdo colado se perde ao retomar conversas antigas. Suas sessões e histórico não são tocados.",
   "rule.ai.claude-code.logs": "Claude Code: logs de depuração",
   "rule.ai.claude-code.logs.consequence": "Você perde os logs de depuração antigos. O Claude Code continua funcionando normalmente.",
   "rule.ai.cursor.cache": "Cursor: cache",

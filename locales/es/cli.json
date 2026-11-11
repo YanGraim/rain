@@ -34,7 +34,7 @@
   "error.unsupported-os": "Este sistema operativo aún no es compatible.",
   "error.render-json": "No se pudo generar el informe JSON: {reason}",
   "rule.ai.claude-code.cache": "Claude Code: cachés e instantáneas",
-  "rule.ai.claude-code.cache.consequence": "Claude Code los vuelve a crear solo. Tus sesiones e historial no se tocan.",
+  "rule.ai.claude-code.cache.consequence": "Claude Code los vuelve a crear solo. El contenido pegado se pierde al retomar conversaciones antiguas. Tus sesiones e historial no se tocan.",
   "rule.ai.claude-code.logs": "Claude Code: registros de depuración",
   "rule.ai.claude-code.logs.consequence": "Pierdes los registros de depuración antiguos. Claude Code sigue funcionando con normalidad.",
   "rule.ai.cursor.cache": "Cursor: caché",
