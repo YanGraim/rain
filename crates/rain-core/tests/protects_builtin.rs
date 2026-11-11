@@ -22,6 +22,14 @@ fn protects_pkg_homebrew() {
 
 // NFR-005, FR-007
 #[test]
+fn protects_pkg_js_caches() {
+    for id in ["pkg.npm", "pkg.yarn", "pkg.bun", "pkg.pnpm"] {
+        protects(id);
+    }
+}
+
+// NFR-005, FR-007
+#[test]
 fn protects_registry_covers_every_rule() {
     for rule in rules::builtin() {
         assert_rule_protects(*rule);
