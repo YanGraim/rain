@@ -186,7 +186,7 @@ mod tests {
     // FR-002, ADR 0005: more specific rules come first, so the Homebrew
     // cache keeps its bytes when the user caches rule also sees them.
     #[test]
-    fn builtin_starts_with_homebrew_then_xcode() {
+    fn homebrew_then_xcode_before_user_caches() {
         let all = ids(builtin());
         let at = |id: &str| all.iter().position(|x| *x == id);
         assert!(at("pkg.homebrew") < at("apple.derived-data"));
@@ -363,12 +363,15 @@ mod tests {
         let _ = assemble(&[&slice]);
     }
 
-    // FR-002 / ADR 0005: the registry order is homebrew, xcode, logs, caches.
+    // FR-002 / ADR 0005: the registry order is AI, JS package caches, homebrew,
+    // xcode, logs, caches.
     #[test]
     fn builtin_order_is_specific_first() {
         assert_eq!(
             ids(builtin()),
             [
+                "ai.claude-code.cache",
+                "ai.claude-code.logs",
                 "pkg.npm",
                 "pkg.yarn",
                 "pkg.bun",
