@@ -6,11 +6,11 @@ use crate::model::{Category, Risk, RuleId};
 use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
 use rain_platform::{Os, Root};
 
-pub(super) static RULES: &[&dyn Rule] = &[&NPM, &YARN, &BUN, &PNPM];
+pub(super) static RULES: &[&dyn Rule] = &[&NPM, &YARN, &BUN, &PNPM, &PIP, &UV, &POETRY];
 
-// --- JS -------------------------------------------------------------------
+// --- JS and shared -------------------------------------------------------------------
 
-const fn js_meta(
+const fn pkg_meta(
     id: &'static str,
     name_key: &'static str,
     consequence_key: &'static str,
@@ -31,7 +31,7 @@ const fn js_meta(
 
 /// FR-001 (6.4): npm content cache; each child of `_cacache` is one item.
 pub static NPM: ChildrenOf = ChildrenOf {
-    meta: js_meta(
+    meta: pkg_meta(
         "pkg.npm",
         "rule.pkg.npm",
         "rule.pkg.npm.consequence",
@@ -45,7 +45,7 @@ pub static NPM: ChildrenOf = ChildrenOf {
 /// FR-001 (6.4): Yarn classic (in `{caches}`) and Yarn Berry caches.
 /// Listed before the user caches rule so it keeps those bytes (ADR 0005).
 pub static YARN: ChildrenOfRoots = ChildrenOfRoots {
-    meta: js_meta(
+    meta: pkg_meta(
         "pkg.yarn",
         "rule.pkg.yarn",
         "rule.pkg.yarn.consequence",
@@ -56,7 +56,7 @@ pub static YARN: ChildrenOfRoots = ChildrenOfRoots {
 
 /// FR-001 (6.4): Bun install cache.
 pub static BUN: ChildrenOf = ChildrenOf {
-    meta: js_meta(
+    meta: pkg_meta(
         "pkg.bun",
         "rule.pkg.bun",
         "rule.pkg.bun.consequence",
@@ -70,7 +70,7 @@ pub static BUN: ChildrenOf = ChildrenOf {
 /// FR-001 (6.4): pnpm content store. Projects hard link into it, so it is
 /// medium risk and not preselected.
 pub static PNPM: ChildrenOf = ChildrenOf {
-    meta: js_meta(
+    meta: pkg_meta(
         "pkg.pnpm",
         "rule.pkg.pnpm",
         "rule.pkg.pnpm.consequence",
@@ -79,6 +79,50 @@ pub static PNPM: ChildrenOf = ChildrenOf {
     root: Root::Home,
     rels: &["Library/pnpm/store"],
     depth: 1,
+};
+
+// --- Python ---------------------------------------------------------------
+
+/// FR-001 (6.4): pip cache. Listed before the user caches rule so it keeps
+/// those bytes (ADR 0005).
+pub static PIP: ChildrenOf = ChildrenOf {
+    meta: pkg_meta(
+        "pkg.pip",
+        "rule.pkg.pip",
+        "rule.pkg.pip.consequence",
+        Risk::Low,
+    ),
+    root: Root::Caches,
+    rels: &["pip"],
+    depth: 1,
+};
+
+/// FR-001 (6.4): uv cache.
+pub static UV: ChildrenOf = ChildrenOf {
+    meta: pkg_meta(
+        "pkg.uv",
+        "rule.pkg.uv",
+        "rule.pkg.uv.consequence",
+        Risk::Low,
+    ),
+    root: Root::Home,
+    rels: &[".cache/uv"],
+    depth: 1,
+};
+
+/// FR-001 (6.4): Poetry cache and artifacts. Only those two folders: the
+/// sibling `virtualenvs` holds project environments (medium risk).
+pub static POETRY: ChildrenOfRoots = ChildrenOfRoots {
+    meta: pkg_meta(
+        "pkg.poetry",
+        "rule.pkg.poetry",
+        "rule.pkg.poetry.consequence",
+        Risk::Low,
+    ),
+    roots: &[
+        (Root::Caches, "pypoetry/cache"),
+        (Root::Caches, "pypoetry/artifacts"),
+    ],
 };
 
 /// Like [`ChildrenOf`] at depth 1, but over folders under different roots.
@@ -340,6 +384,112 @@ mod tests {
             vec![
                 ("pkg.yarn", h("Library/Caches/Yarn/v6"), 8 * 512),
                 ("sys.user-caches", h("Library/Caches/Yarn"), 0),
+            ]
+        );
+    }
+
+    // FR-001 (6.4): pip cache in `{caches}/pip`, one item per child.
+    #[test]
+    fn pip_found_in_fixture() {
+        let fs = fixture(&[
+            "Library/Caches/pip/http-v2/a/b",
+            "Library/Caches/pip/wheels/x/y.whl",
+        ]);
+        let report = run(&fs, "pkg.pip");
+        assert_eq!(
+            items(&report),
+            vec![
+                h("Library/Caches/pip/http-v2"),
+                h("Library/Caches/pip/wheels"),
+            ]
+        );
+    }
+
+    // FR-001 (6.4): uv cache in `~/.cache/uv`.
+    #[test]
+    fn uv_found_in_fixture() {
+        let fs = fixture(&[".cache/uv/wheels-v5/x", ".cache/other/y"]);
+        let report = run(&fs, "pkg.uv");
+        assert_eq!(items(&report), vec![h(".cache/uv/wheels-v5")]);
+    }
+
+    // FR-001 (6.4): Poetry cache and artifacts. Poetry virtualenvs are
+    // medium risk in the catalogue, so this low rule never lists them.
+    #[test]
+    fn poetry_found_in_fixture() {
+        let fs = fixture(&[
+            "Library/Caches/pypoetry/cache/repositories/pypi/x",
+            "Library/Caches/pypoetry/artifacts/00/a.whl",
+            "Library/Caches/pypoetry/virtualenvs/proj-py3.12/bin/python",
+        ]);
+        let report = run(&fs, "pkg.poetry");
+        assert_eq!(
+            items(&report),
+            vec![
+                h("Library/Caches/pypoetry/artifacts/00"),
+                h("Library/Caches/pypoetry/cache/repositories"),
+            ]
+        );
+    }
+
+    // FR-001 (6.4), FR-014: Python caches are low risk and preselected.
+    #[test]
+    fn python_caches_are_low_and_default() {
+        for id in ["pkg.pip", "pkg.uv", "pkg.poetry"] {
+            let m = meta(id);
+            assert_eq!(m.risk, Risk::Low, "{id}");
+            assert!(m.default_selected, "{id}");
+            assert_eq!(m.category, crate::model::Category::PackageManagers);
+            assert_eq!(m.requires_app_closed, None);
+        }
+    }
+
+    // FR-005: a missing tool is silent.
+    #[test]
+    fn missing_python_tools_are_silent() {
+        let fs = fixture(&[]);
+        for id in ["pkg.pip", "pkg.uv", "pkg.poetry"] {
+            let report = run(&fs, id);
+            assert!(report.items.is_empty(), "{id}");
+            assert!(report.skipped.is_empty(), "{id}");
+        }
+    }
+
+    // ADR 0005: the pip bytes inside `{caches}` belong to pkg.pip; the user
+    // caches item for the folder excludes them.
+    #[test]
+    fn pip_inside_caches_goes_to_pip() {
+        let fs = fixture(&["Library/Caches/pip/http-v2/a"]);
+        let rules = super::super::select(&["pkg.pip", "sys.user-caches"]).unwrap();
+        let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(&fs);
+        let roots = ResolvedRoots {
+            home: PathBuf::from(HOME),
+            caches: PathBuf::from(CACHES),
+            logs: h("Library/Logs"),
+        };
+        let ctx = ScanContext {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: Vec::new(),
+                now: SystemTime::UNIX_EPOCH,
+            },
+            threads: Some(1),
+            tools: &crate::tools::NoTools,
+        };
+        let report = scan(&rules, &ctx, &AtomicBool::new(false)).unwrap();
+        let bytes: Vec<_> = report
+            .items
+            .iter()
+            .map(|i| (i.rule.as_str(), i.path.clone(), i.allocated_bytes))
+            .collect();
+        assert_eq!(
+            bytes,
+            vec![
+                ("pkg.pip", h("Library/Caches/pip/http-v2"), 8 * 512),
+                ("sys.user-caches", h("Library/Caches/pip"), 0),
             ]
         );
     }

@@ -363,8 +363,8 @@ mod tests {
         let _ = assemble(&[&slice]);
     }
 
-    // FR-002 / ADR 0005: the registry order is AI, JS package caches, homebrew,
-    // xcode, logs, caches.
+    // FR-002 / ADR 0005: the registry order is AI, JS and Python package
+    // caches, homebrew, xcode, logs, caches.
     #[test]
     fn builtin_order_is_specific_first() {
         assert_eq!(
@@ -376,6 +376,9 @@ mod tests {
                 "pkg.yarn",
                 "pkg.bun",
                 "pkg.pnpm",
+                "pkg.pip",
+                "pkg.uv",
+                "pkg.poetry",
                 "pkg.homebrew",
                 "apple.derived-data",
                 "sys.logs",
