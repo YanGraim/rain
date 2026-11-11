@@ -51,6 +51,10 @@ jobs:
       - name: No test features in release graph
         shell: bash
         run: ./scripts/check-release-features.sh
+      # Libraries must build without dev-dependency feature unification
+      # (tests can silently enable dependency features production lacks).
+      - name: Library builds without test features
+        run: cargo check --locked --workspace --lib
 
   # Supply chain: licenses, bans, sources (deny.toml) and RustSec advisories.
   supply-chain:
