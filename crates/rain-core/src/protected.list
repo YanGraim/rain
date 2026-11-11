@@ -51,6 +51,8 @@
 ~/Library/Caches/CloudKit
 ~/Library/Caches/com.apple.bird
 ~/Library/Caches/docker-secrets-engine
+# Poetry project virtualenvs live under Caches but are environments, not cache.
+~/Library/Caches/pypoetry/virtualenvs
 
 # Container engines: VM disks and data, cleaned only by the engine itself.
 # Docker's group container is already covered by ~/Library/Group Containers.

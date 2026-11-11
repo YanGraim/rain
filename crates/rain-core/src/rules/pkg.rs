@@ -388,6 +388,46 @@ mod tests {
         );
     }
 
+    // FR-001 (6.4), FR-043: Poetry virtualenvs are project environments.
+    // With `sys.user-caches` also selected, nothing under
+    // `{caches}/pypoetry/virtualenvs` is a candidate or counted in any item.
+    #[test]
+    fn poetry_virtualenvs_never_candidate() {
+        let fs = fixture(&[
+            "Library/Caches/pypoetry/cache/x/a",
+            "Library/Caches/pypoetry/virtualenvs/p/bin/python",
+        ]);
+        let rules = super::super::select(&["pkg.poetry", "sys.user-caches"]).unwrap();
+        let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(&fs);
+        let roots = ResolvedRoots {
+            home: PathBuf::from(HOME),
+            caches: PathBuf::from(CACHES),
+            logs: h("Library/Logs"),
+        };
+        let ctx = ScanContext {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: Vec::new(),
+                now: SystemTime::UNIX_EPOCH,
+            },
+            threads: Some(1),
+            tools: &crate::tools::NoTools,
+        };
+        let report = scan(&rules, &ctx, &AtomicBool::new(false)).unwrap();
+        let venvs = h("Library/Caches/pypoetry/virtualenvs");
+        for item in &report.items {
+            assert!(!item.path.starts_with(&venvs), "{item:?}");
+            assert!(!venvs.starts_with(&item.path), "{item:?} counts the venvs");
+        }
+        assert!(report
+            .items
+            .iter()
+            .any(|i| i.path == h("Library/Caches/pypoetry/cache/x")));
+    }
+
     // FR-001 (6.4): pip cache in `{caches}/pip`, one item per child.
     #[test]
     fn pip_found_in_fixture() {
