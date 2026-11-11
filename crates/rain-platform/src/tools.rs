@@ -235,9 +235,15 @@ fn wait(
 }
 
 fn kill_group(child: &mut Child) {
-    let pgid = rustix::process::Pid::from_child(child);
-    // ESRCH just means the group is already gone.
-    let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
+    // `from_raw` instead of `from_child`: the latter needs an extra rustix
+    // feature that only test builds enable. The child leads its own group.
+    let pgid = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw);
+    if let Some(pgid) = pgid {
+        // ESRCH just means the group is already gone.
+        let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
+    }
     let _ = child.wait();
 }
 
