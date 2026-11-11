@@ -187,21 +187,23 @@ mod tests {
     // cache keeps its bytes when the user caches rule also sees them.
     #[test]
     fn builtin_starts_with_homebrew_then_xcode() {
-        assert_eq!(
-            ids(builtin()).get(..2),
-            Some(&["pkg.homebrew", "apple.derived-data"][..])
-        );
+        let all = ids(builtin());
+        let at = |id: &str| all.iter().position(|x| *x == id);
+        assert!(at("pkg.homebrew") < at("apple.derived-data"));
+        assert!(at("apple.derived-data") < at("sys.user-caches"));
     }
 
     // FR-013: every builtin rule name is a catalogue key, so it exists in
     // all locales (checked by the catalogue tests).
     #[test]
     fn builtin_names_are_message_keys() {
-        use crate::messages::MessageKey;
+        use crate::messages::{catalogue_keys, MessageKey};
+        let catalogue = catalogue_keys();
         for rule in builtin() {
             let key = rule.meta().name_key;
             assert!(
-                MessageKey::ALL.iter().any(|k| k.as_str() == key),
+                MessageKey::ALL.iter().any(|k| k.as_str() == key)
+                    || catalogue.iter().any(|k| k == key),
                 "missing message key {key}"
             );
         }
@@ -233,7 +235,14 @@ mod tests {
     // FR-001
     #[test]
     fn rules_from_scan_macos_are_default_selected() {
-        for rule in builtin() {
+        let scan_macos = [
+            "pkg.homebrew",
+            "apple.derived-data",
+            "sys.logs",
+            "sys.user-caches",
+            "proj.node-modules",
+        ];
+        for rule in select(&scan_macos).unwrap() {
             let meta = rule.meta();
             if meta.id.as_str() == "proj.node-modules" {
                 assert!(!meta.default_selected, "{}", meta.id);
@@ -360,6 +369,10 @@ mod tests {
         assert_eq!(
             ids(builtin()),
             [
+                "pkg.npm",
+                "pkg.yarn",
+                "pkg.bun",
+                "pkg.pnpm",
                 "pkg.homebrew",
                 "apple.derived-data",
                 "sys.logs",
