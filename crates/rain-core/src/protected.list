@@ -75,6 +75,17 @@
 ~/Library/Application Support/Electrum
 ~/Library/Application Support/Exodus
 
+# Password-manager caches (FR-044): sys.user-caches lists every child of
+# ~/Library/Caches, so these must never be candidates.
+~/Library/Caches/com.1password.1password
+~/Library/Caches/com.agilebits.onepassword7
+~/Library/Caches/2BUA8C4S2C.com.1password
+~/Library/Caches/com.bitwarden.desktop
+~/Library/Caches/com.lastpass.LastPass
+~/Library/Caches/com.dashlane.Dashlane
+~/Library/Caches/in.sinew.Enpass-Desktop
+~/Library/Caches/org.keepassxc.keepassxc
+
 # Claude Code user data: config, credentials, sessions and history.
 # ~/.claude itself stays open so the cache and debug log rules still work.
 ~/.claude.json
@@ -98,3 +109,8 @@
 ~/.claude/output-styles
 ~/.claude/session-env
 ~/.claude.json.backup
+
+# AI tool credentials (OAuth tokens).
+~/.config/github-copilot/hosts.json
+~/.config/github-copilot/apps.json
+~/.codex/auth.json
