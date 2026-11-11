@@ -1228,4 +1228,157 @@ mod engines_tests {
     fn podman_data_is_protected() {
         assert_engine_protected(".local/share/containers");
     }
+
+    // FR-007
+    #[test]
+    fn claude_json_is_protected() {
+        assert_engine_protected(".claude.json");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_credentials_is_protected() {
+        assert_engine_protected(".claude/.credentials.json");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_settings_is_protected() {
+        assert_engine_protected(".claude/settings.json");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_local_settings_is_protected() {
+        assert_engine_protected(".claude/settings.local.json");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_projects_is_protected() {
+        assert_engine_protected(".claude/projects");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_history_is_protected() {
+        assert_engine_protected(".claude/history.jsonl");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_todos_is_protected() {
+        assert_engine_protected(".claude/todos");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_file_history_is_protected() {
+        assert_engine_protected(".claude/file-history");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_sessions_is_protected() {
+        assert_engine_protected(".claude/sessions");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_plans_is_protected() {
+        assert_engine_protected(".claude/plans");
+    }
+
+    // FR-007
+    #[test]
+    fn claude_backups_is_protected() {
+        assert_engine_protected(".claude/backups");
+    }
+
+    // FR-007: the user data entries must not shadow the cache rules.
+    #[test]
+    fn claude_root_is_not_protected_and_cache_rules_still_find_items() {
+        let list = builtin();
+        let home = Path::new(HOME);
+        assert!(!list.is_protected(&home.join(".claude")));
+        let mut fs = FakeFs::new();
+        fs.insert("/", meta(true, 1, 0))
+            .insert("/Users", meta(true, 2, 0));
+        let mut ino = 100;
+        let mut add = |fs: &mut FakeFs, rel: &str, is_dir: bool| {
+            ino += 1;
+            fs.insert(
+                home.join(rel),
+                meta(is_dir, ino, if is_dir { 0 } else { 8 }),
+            );
+        };
+        for d in [
+            "",
+            ".claude",
+            ".claude/cache",
+            ".claude/paste-cache",
+            ".claude/shell-snapshots",
+            ".claude/debug",
+            ".claude/projects",
+            ".claude/todos",
+            "Library",
+            "Library/Caches",
+            "Library/Logs",
+        ] {
+            add(&mut fs, d, true);
+        }
+        for f in [
+            ".claude/cache/c.md",
+            ".claude/paste-cache/p.txt",
+            ".claude/shell-snapshots/s.sh",
+            ".claude/debug/d.txt",
+            ".claude/projects/p.jsonl",
+            ".claude/todos/t.json",
+            ".claude/history.jsonl",
+            ".claude/settings.json",
+            ".claude.json",
+        ] {
+            add(&mut fs, f, false);
+        }
+        let protect = builtin().with_identities(&fs);
+        let library = home.join("Library");
+        let roots = ResolvedRoots {
+            home: home.to_path_buf(),
+            caches: library.join("Caches"),
+            logs: library.join("Logs"),
+        };
+        let ctx = ScanContext {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: RuleContext {
+                min_age_days: 0,
+                user_paths: vec![],
+                now: SystemTime::UNIX_EPOCH + Duration::from_secs(86_400),
+            },
+            tools: &crate::tools::NoTools,
+            threads: Some(1),
+        };
+        let selected = match rules::select(&["ai.claude-code.cache", "ai.claude-code.logs"]) {
+            Ok(selected) => selected,
+            Err(e) => panic!("select failed: {e}"),
+        };
+        let report = match scan(&selected, &ctx, &AtomicBool::new(false)) {
+            Ok(report) => report,
+            Err(e) => panic!("scan failed: {e}"),
+        };
+        let mut paths: Vec<_> = report.items.iter().map(|i| i.path.clone()).collect();
+        paths.sort();
+        let mut want: Vec<_> = [
+            ".claude/cache/c.md",
+            ".claude/debug/d.txt",
+            ".claude/paste-cache/p.txt",
+            ".claude/shell-snapshots/s.sh",
+        ]
+        .iter()
+        .map(|r| home.join(r))
+        .collect();
+        want.sort();
+        assert_eq!(paths, want, "{:?}", report.skipped);
+    }
 }
