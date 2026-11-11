@@ -11,8 +11,9 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// stdout cap; past it the run fails with [`RunError::OutputTooLarge`].
@@ -145,12 +146,14 @@ impl ProcessToolRunner {
             .take()
             .map(|s| read_capped(s, req.max_stdout, Arc::clone(&overflow)));
         let stderr = child.stderr.take().map(count_bytes);
-        let waited = wait(&mut child, req.timeout, cancel, &overflow);
+        let deadline = Instant::now() + req.timeout;
+        let waited = wait(&mut child, deadline, cancel, &overflow);
         // Always reap the group: grandchildren may still hold the pipes open.
         kill_group(&mut child);
-        let out = join(stdout);
-        let err_len = join(stderr);
         let status = waited?;
+        let drain = deadline.max(Instant::now() + DRAIN_GRACE);
+        let out = join(stdout, drain, cancel);
+        let err_len = join(stderr, drain, cancel);
         if overflow.load(Ordering::SeqCst) {
             return Err(RunError::OutputTooLarge);
         }
@@ -210,11 +213,10 @@ fn resolve(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 fn wait(
     child: &mut Child,
-    timeout: Duration,
+    deadline: Instant,
     cancel: &AtomicBool,
     overflow: &AtomicBool,
 ) -> Result<ExitStatus, RunError> {
-    let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().map_err(|e| RunError::Io(e.kind()))? {
             return Ok(status);
@@ -239,12 +241,18 @@ fn kill_group(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Time the readers get after the group is killed. A grandchild that left
+/// the group (setsid) can keep the pipes open forever; we stop waiting.
+const DRAIN_GRACE: Duration = Duration::from_millis(200);
+
+type Reader<T> = Receiver<io::Result<T>>;
+
 fn read_capped(
     mut src: impl Read + Send + 'static,
     cap: usize,
     overflow: Arc<AtomicBool>,
-) -> JoinHandle<io::Result<Vec<u8>>> {
-    thread::spawn(move || {
+) -> Reader<Vec<u8>> {
+    reader(move || {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
@@ -261,8 +269,8 @@ fn read_capped(
     })
 }
 
-fn count_bytes(mut src: impl Read + Send + 'static) -> JoinHandle<io::Result<usize>> {
-    thread::spawn(move || {
+fn count_bytes(mut src: impl Read + Send + 'static) -> Reader<usize> {
+    reader(move || {
         let mut total = 0usize;
         let mut chunk = [0u8; 8192];
         loop {
@@ -275,16 +283,38 @@ fn count_bytes(mut src: impl Read + Send + 'static) -> JoinHandle<io::Result<usi
     })
 }
 
-fn join<T>(h: Option<JoinHandle<io::Result<T>>>) -> Result<T, RunError>
-where
-    T: Default,
-{
-    match h {
-        None => Ok(T::default()),
-        Some(h) => match h.join() {
-            Ok(r) => r.map_err(|e| RunError::Io(e.kind())),
-            Err(_) => Err(RunError::Io(io::ErrorKind::Other)),
-        },
+// Detached thread reporting through a channel, so the caller can stop
+// waiting; a stuck thread ends when the last pipe holder exits.
+fn reader<T: Send + 'static>(f: impl FnOnce() -> io::Result<T> + Send + 'static) -> Reader<T> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx
+}
+
+/// Waits for a reader until `deadline`, or until `cancel` is raised.
+fn join<T: Default>(
+    r: Option<Reader<T>>,
+    deadline: Instant,
+    cancel: &AtomicBool,
+) -> Result<T, RunError> {
+    let Some(rx) = r else {
+        return Ok(T::default());
+    };
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(RunError::Cancelled);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(RunError::Timeout);
+        }
+        match rx.recv_timeout(left.min(POLL)) {
+            Ok(res) => return res.map_err(|e| RunError::Io(e.kind())),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Err(RunError::Io(io::ErrorKind::Other)),
+        }
     }
 }
 
@@ -327,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn binary_outside_allowlist_is_not_installed() {
+    fn missing_or_unusable_binary_is_not_installed() {
         let dir = tempfile::tempdir().unwrap();
         let r = req(dir.path().join("docker"), &[], Duration::from_secs(5));
         assert_eq!(go(&r), Err(RunError::NotInstalled));
@@ -408,9 +438,11 @@ mod tests {
             0o700,
         );
         assert_eq!(
-            go(&req(s, &[], Duration::from_millis(500))),
+            go(&req(s, &[], Duration::from_secs(2))),
             Err(RunError::Timeout)
         );
+        // The pidfile is written right after the fork; 2 s leaves room on
+        // a loaded machine (500 ms raced once under load).
         let pid: i32 = std::fs::read_to_string(&pidfile)
             .unwrap()
             .trim()
@@ -421,6 +453,36 @@ mod tests {
             thread::sleep(POLL);
         }
         assert!(!alive(pid), "grandchild {pid} survived");
+    }
+
+    #[test]
+    fn detached_grandchild_holding_pipes_does_not_hang() {
+        // setsid escapes the group kill; the readers must still give up.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let s = script(
+            dir.path(),
+            "detach",
+            &format!(
+                "/usr/bin/perl -e 'use POSIX; fork and exit; POSIX::setsid(); \
+                 open F, q(>), q({}); print F $$; close F; exec q(/bin/sleep), 30'\n\
+                 echo started",
+                pidfile.display()
+            ),
+            0o700,
+        );
+        let start = Instant::now();
+        let res = go(&req(s, &[], Duration::from_millis(500)));
+        let took = start.elapsed();
+        if let Some(pid) = std::fs::read_to_string(&pidfile)
+            .ok()
+            .and_then(|t| t.trim().parse().ok())
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        assert!(took < Duration::from_secs(5), "hung for {took:?}");
+        assert_eq!(res, Err(RunError::Timeout));
     }
 
     #[test]
