@@ -1,0 +1,39 @@
+# Fixture for the `proj.rust-target` rule, loaded into a FakeFs below the
+# test home `/Users/Tester`. One entry per line: `<kind> <age-days> <path>`,
+# kind `d` (directory), `f` (file, 8 blocks) or `l` (symlink); age is mtime
+# before "now".
+#
+# Inactive project (90 days): its target is the only expected item. The
+# target nested inside it (a crate vendored in the build output) is never
+# listed on its own.
+d 90 code
+d 90 code/old
+f 90 code/old/Cargo.toml
+f 90 code/old/main.rs
+d 90 code/old/target
+f 90 code/old/target/app
+d 90 code/old/target/vendored
+f 90 code/old/target/vendored/Cargo.toml
+d 90 code/old/target/vendored/target
+f 90 code/old/target/vendored/target/lib
+# Recent project (2 days): ignored.
+d 2 code/recent
+f 2 code/recent/Cargo.toml
+d 90 code/recent/target
+f 90 code/recent/target/app
+# target with no Cargo.toml beside it: ignored.
+d 90 code/orphan
+f 90 code/orphan/readme.md
+d 90 code/orphan/target
+f 90 code/orphan/target/app
+# Cargo.toml that is a symlink: ignored.
+d 90 code/linked
+l 90 code/linked/Cargo.toml
+d 90 code/linked/target
+f 90 code/linked/target/app
+# Old project under a protected path: never entered.
+d 90 Documents
+d 90 Documents/proj
+f 90 Documents/proj/Cargo.toml
+d 90 Documents/proj/target
+f 90 Documents/proj/target/app
