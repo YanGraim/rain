@@ -276,7 +276,14 @@ mod tests {
         );
         let others = builtin()
             .iter()
-            .filter(|r| r.meta().id.as_str() != "apple.derived-data");
+            // FR-015: the Cursor and Windsurf rules are covered in
+            // `tests/rules_ai_cursor.rs`.
+            .filter(|r| {
+                !matches!(
+                    r.meta().id.as_str(),
+                    "apple.derived-data" | "ai.cursor.cache" | "ai.windsurf.cache"
+                )
+            });
         for rule in others {
             assert_eq!(rule.meta().requires_app_closed, None, "{}", rule.meta().id);
         }
@@ -372,6 +379,8 @@ mod tests {
             [
                 "ai.claude-code.cache",
                 "ai.claude-code.logs",
+                "ai.cursor.cache",
+                "ai.windsurf.cache",
                 "pkg.npm",
                 "pkg.yarn",
                 "pkg.bun",
