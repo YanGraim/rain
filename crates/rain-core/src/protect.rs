@@ -1351,6 +1351,72 @@ mod engines_tests {
         assert_engine_protected(".claude.json.backup");
     }
 
+    // FR-007, FR-044
+    #[test]
+    fn onepassword8_cache_is_protected() {
+        assert_engine_protected("Library/Caches/com.1password.1password");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn onepassword7_cache_is_protected() {
+        assert_engine_protected("Library/Caches/com.agilebits.onepassword7");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn onepassword_team_cache_is_protected() {
+        assert_engine_protected("Library/Caches/2BUA8C4S2C.com.1password");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn bitwarden_cache_is_protected() {
+        assert_engine_protected("Library/Caches/com.bitwarden.desktop");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn lastpass_cache_is_protected() {
+        assert_engine_protected("Library/Caches/com.lastpass.LastPass");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn dashlane_cache_is_protected() {
+        assert_engine_protected("Library/Caches/com.dashlane.Dashlane");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn enpass_cache_is_protected() {
+        assert_engine_protected("Library/Caches/in.sinew.Enpass-Desktop");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn keepassxc_cache_is_protected() {
+        assert_engine_protected("Library/Caches/org.keepassxc.keepassxc");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn copilot_hosts_is_protected() {
+        assert_engine_protected(".config/github-copilot/hosts.json");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn copilot_apps_is_protected() {
+        assert_engine_protected(".config/github-copilot/apps.json");
+    }
+
+    // FR-007, FR-044
+    #[test]
+    fn codex_auth_is_protected() {
+        assert_engine_protected(".codex/auth.json");
+    }
+
     // FR-007: the user data entries must not shadow the cache rules.
     #[test]
     fn claude_root_is_not_protected_and_cache_rules_still_find_items() {
