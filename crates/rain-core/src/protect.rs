@@ -494,6 +494,8 @@ mod list_tests {
         "~/Library/Caches/CloudKit",
         "~/Library/Caches/com.apple.bird",
         "~/Library/Caches/docker-secrets-engine",
+        // FR-001 (6.4)
+        "~/Library/Caches/pypoetry/virtualenvs",
     ];
 
     /// Splits text into tokens that each match one spelling in `EQUIVALENT`
