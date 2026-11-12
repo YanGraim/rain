@@ -277,7 +277,7 @@ mod tests {
         let others = builtin()
             .iter()
             // FR-015: the Cursor and Windsurf rules are covered in
-            // `tests/rules_ai_cursor.rs` and `tests/rules_ai_tools.rs`.
+            // `tests/rules_ai_cursor.rs` and `tests/rules_ai_tools.rs`; the Xcode ones in `tests/rules_apple.rs`.
             .filter(|r| {
                 !matches!(
                     r.meta().id.as_str(),
@@ -285,6 +285,9 @@ mod tests {
                         | "ai.cursor.cache"
                         | "ai.cursor.workspace-storage"
                         | "ai.windsurf.cache"
+                        | "apple.archives"
+                        | "apple.device-support"
+                        | "apple.previews"
                 )
             });
         for rule in others {
@@ -398,6 +401,9 @@ mod tests {
                 "pkg.uv",
                 "pkg.poetry",
                 "pkg.homebrew",
+                "apple.archives",
+                "apple.device-support",
+                "apple.previews",
                 "apple.derived-data",
                 "sys.sensitive-caches",
                 "sys.logs",
