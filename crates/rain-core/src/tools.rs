@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-/// Default time a tool gets before it is killed.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default time a tool gets before it is killed. `docker system df` alone
+/// takes several seconds on a busy engine; cancel still stops it at once.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Closed list of tools the core may ask for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
