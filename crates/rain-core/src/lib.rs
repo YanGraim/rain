@@ -6,6 +6,7 @@ pub mod messages;
 pub mod model;
 pub mod planner;
 pub mod protect;
+mod providers;
 pub mod rule;
 pub mod rules;
 pub mod size;
