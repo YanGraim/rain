@@ -228,3 +228,20 @@ fn dangling_counts_when_system_df_fails() {
     let report = run(&fake(FakeReply::Error(ToolError::Timeout), ok(DANGLING)));
     assert_eq!(report.tool_total_bytes, 1_250_000_000);
 }
+
+// FR-022: `docker system df` takes several seconds on real machines; the
+// probe gets 30 s (bounded; cancel still stops it at once).
+#[test]
+fn docker_probes_allow_30_seconds() {
+    for id in IDS {
+        let r = rules::select(&[id]).unwrap();
+        let rain_core::rule::RuleKind::Provider(p) = r[0].kind() else {
+            panic!("{id} is not a provider");
+        };
+        assert_eq!(
+            p.probe().timeout,
+            std::time::Duration::from_secs(30),
+            "{id}"
+        );
+    }
+}
