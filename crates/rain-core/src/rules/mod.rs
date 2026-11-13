@@ -408,6 +408,8 @@ mod tests {
                 "containers.unused-images",
                 "containers.volumes",
                 "pkg.npm",
+                "pkg.npx",
+                "pkg.playwright",
                 "pkg.yarn",
                 "pkg.bun",
                 "pkg.pnpm",

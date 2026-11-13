@@ -6,7 +6,17 @@ use crate::model::{Category, Risk, RuleId};
 use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
 use rain_platform::{Os, Root};
 
-pub(super) static RULES: &[&dyn Rule] = &[&NPM, &YARN, &BUN, &PNPM, &PIP, &UV, &POETRY];
+pub(super) static RULES: &[&dyn Rule] = &[
+    &NPM,
+    &NPX,
+    &PLAYWRIGHT,
+    &YARN,
+    &BUN,
+    &PNPM,
+    &PIP,
+    &UV,
+    &POETRY,
+];
 
 // --- JS and shared -------------------------------------------------------------------
 
@@ -41,6 +51,111 @@ pub static NPM: ChildrenOf = ChildrenOf {
     rels: &[".npm/_cacache"],
     depth: 1,
 };
+
+/// AI2f: npx install cache (`~/.npm/_npx/<hash>`: package.json and
+/// node_modules). npx downloads them again on the next run.
+pub static NPX: ChildrenOf = ChildrenOf {
+    meta: pkg_meta(
+        "pkg.npx",
+        "rule.pkg.npx",
+        "rule.pkg.npx.consequence",
+        Risk::Low,
+    ),
+    root: Root::Home,
+    rels: &[".npm/_npx"],
+    depth: 1,
+};
+
+/// AI2f: Playwright browsers in `{caches}/ms-playwright`, named
+/// `<browser>-<revision>`. Only revisions with a newer one of the same
+/// browser are items; the newest stays. Listed before the user caches rule
+/// so it keeps those bytes (ADR 0005).
+pub static PLAYWRIGHT: OldRevisions = OldRevisions {
+    meta: pkg_meta(
+        "pkg.playwright",
+        "rule.pkg.playwright",
+        "rule.pkg.playwright.consequence",
+        Risk::Medium,
+    ),
+    root: Root::Caches,
+    rel: "ms-playwright",
+};
+
+pub struct OldRevisions {
+    meta: RuleMeta,
+    root: Root,
+    rel: &'static str,
+}
+
+impl Rule for OldRevisions {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Files(self)
+    }
+}
+
+/// `chromium_headless_shell-1148` -> (`chromium_headless_shell`, 1148).
+fn revision(name: &str) -> Option<(&str, u64)> {
+    let (browser, rev) = name.rsplit_once('-')?;
+    let ok_browser = !browser.is_empty()
+        && browser
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    if !ok_browser || rev.is_empty() || !rev.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((browser, rev.parse().ok()?))
+}
+
+/// `true` only if a strictly newer revision of the same browser exists and
+/// no sibling of that browser is unparseable (fail closed).
+fn is_old_revision(name: &str, siblings: &[String]) -> bool {
+    let Some((browser, rev)) = revision(name) else {
+        return false;
+    };
+    let prefix = format!("{browser}-");
+    let mut newer = false;
+    for other in siblings.iter().filter(|s| s.as_str() != name) {
+        match revision(other) {
+            Some((b, r)) if b == browser => newer |= r > rev,
+            Some(_) => {}
+            None if other.starts_with(&prefix) => return false,
+            None => {}
+        }
+    }
+    newer
+}
+
+impl FileRule for OldRevisions {
+    fn roots(&self, _: &RuleContext) -> Vec<RootedPath> {
+        vec![RootedPath::Under(self.root, self.rel)]
+    }
+    fn visit(&self, entry: &EntryInfo, depth: usize, _: &RuleContext, fs: &dyn Fs) -> Visit {
+        if depth == 0 {
+            return Visit::Descend;
+        }
+        let (Some(name), Some(parent)) = (
+            entry.path.file_name().and_then(|n| n.to_str()),
+            entry.path.parent(),
+        ) else {
+            return Visit::Skip;
+        };
+        if !entry.meta.is_dir {
+            return Visit::Skip;
+        }
+        let siblings: Option<Vec<String>> = fs.read_dir(parent).ok().and_then(|es| {
+            es.iter()
+                .map(|e| e.path.file_name()?.to_str().map(str::to_owned))
+                .collect()
+        });
+        match siblings {
+            Some(siblings) if is_old_revision(name, &siblings) => Visit::Candidate,
+            _ => Visit::Skip,
+        }
+    }
+}
 
 /// FR-001 (6.4): Yarn classic (in `{caches}`) and Yarn Berry caches.
 /// Listed before the user caches rule so it keeps those bytes (ADR 0005).
