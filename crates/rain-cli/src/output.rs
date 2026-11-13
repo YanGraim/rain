@@ -5,8 +5,13 @@
 use std::io::ErrorKind;
 
 use rain_core::messages::{Catalog, MessageKey};
-use rain_core::model::{Category, ItemId, Risk, ScanReport, SkipReason};
+use rain_core::model::{
+    Category, ItemId, Risk, RuleId, ScanReport, SkipReason, ToolStatus, Unavailable,
+};
+use rain_core::rule::RuleKind;
+use rain_core::rules;
 use rain_core::size::format_decimal;
+use rain_core::tools::{ToolError, ToolId};
 use serde_json::{json, Value};
 
 const COLUMN_GAP: &str = "  ";
@@ -28,16 +33,39 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
             format_decimal(item.allocated_bytes),
         ]);
     }
+    for item in &report.tool_items {
+        rows.push([
+            item.rule.as_str().to_owned(),
+            // The label comes from the tool: untrusted (FR-010).
+            escape_for_terminal(&item.label),
+            format_decimal(item.reported_bytes),
+        ]);
+    }
     rows.push([
         catalog.get(MessageKey::TableTotal).to_owned(),
         String::new(),
         format_decimal(report.total_bytes),
     ]);
+    if !report.tool_items.is_empty() {
+        rows.push([
+            catalog.get(MessageKey::ReportToolTotal).to_owned(),
+            String::new(),
+            format_decimal(report.tool_total_bytes),
+        ]);
+    }
 
     let widths = column_widths(&rows);
     let mut out = String::new();
     for row in &rows {
         push_row(&mut out, row, &widths);
+    }
+    if !report.tool_items.is_empty() {
+        out.push_str(catalog.get(MessageKey::ReportToolTotalNote));
+        out.push('\n');
+    }
+    for line in unavailable_lines(report, catalog) {
+        out.push_str(&line);
+        out.push('\n');
     }
     let skipped = u64::try_from(report.skipped.len()).unwrap_or(u64::MAX);
     if skipped > 0 {
@@ -48,6 +76,60 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
         out.push('\n');
     }
     out
+}
+
+/// FR-022: one line per distinct (tool, reason); several rules share a tool.
+fn unavailable_lines(report: &ScanReport, catalog: &Catalog) -> Vec<String> {
+    let mut lines: Vec<String> = report
+        .providers
+        .iter()
+        .filter_map(|p| match p.status {
+            ToolStatus::Ok => None,
+            ToolStatus::Unavailable(why) => Some(
+                catalog
+                    .get(unavailable_key(why))
+                    .replace("{tool}", tool_name(p.rule)),
+            ),
+        })
+        .collect();
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
+fn unavailable_key(why: Unavailable) -> MessageKey {
+    match why {
+        Unavailable::Failed => MessageKey::ProviderUnavailableFailed,
+        Unavailable::Parse => MessageKey::ProviderUnavailableParse,
+        Unavailable::Tool(e) => match e {
+            ToolError::NotInstalled => MessageKey::ProviderUnavailableNotInstalled,
+            ToolError::NotRunning => MessageKey::ProviderUnavailableNotRunning,
+            ToolError::Timeout => MessageKey::ProviderUnavailableTimeout,
+            ToolError::Cancelled => MessageKey::ProviderUnavailableCancelled,
+            ToolError::OutputTooLarge => MessageKey::ProviderUnavailableOutputTooLarge,
+            ToolError::Denied => MessageKey::ProviderUnavailableDenied,
+            ToolError::Io(_) => MessageKey::ProviderUnavailableIo,
+        },
+    }
+}
+
+/// Product names, not translated.
+fn tool_name(rule: RuleId) -> &'static str {
+    let tool = rules::builtin()
+        .iter()
+        .find(|r| r.meta().id == rule)
+        .and_then(|r| match r.kind() {
+            RuleKind::Provider(p) => Some(p.probe().tool),
+            RuleKind::Files(_) => None,
+        });
+    match tool {
+        Some(ToolId::Docker) => "Docker",
+        Some(ToolId::Podman) => "Podman",
+        Some(ToolId::Brew) => "Homebrew",
+        Some(ToolId::Ollama) => "Ollama",
+        Some(ToolId::Xcrun) => "Xcode",
+        None => rule.as_str(),
+    }
 }
 
 /// Makes text from disk safe to print on a terminal (FR-010): C0, DEL, C1
@@ -363,6 +445,26 @@ mod tests {
         // header + 6 items + total: LF only as row separator.
         assert_eq!(body.split('\n').count(), 8, "{out}");
         insta::assert_snapshot!(out);
+    }
+
+    // FR-010, E7: labels come from the tool and are untrusted.
+    #[test]
+    fn label_from_tool_is_escaped() {
+        let mut r = report(vec![]);
+        r.tool_items = vec![rain_core::model::ToolItem {
+            id: ItemId::of_key(RuleId::new("containers.dangling-images"), "k"),
+            rule: RuleId::new("containers.dangling-images"),
+            key: "k".into(),
+            label: "img\x1b]52;c;cHduZWQ=\x07\u{202e}x".into(),
+            reported_bytes: 5,
+            paths: Vec::new(),
+        }];
+        r.tool_total_bytes = 5;
+        let out = render_table(&r, &en());
+        for bad in ['\x1b', '\x07', '\u{202e}'] {
+            assert!(!out.contains(bad), "{out:?}");
+        }
+        assert!(out.contains("img\\x1b]52"), "{out}");
     }
 
     // FR-010: escaping is injective, so distinct paths print differently.

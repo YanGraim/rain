@@ -151,5 +151,6 @@
   "provider.unavailable.output-too-large": "{tool} returned too much output",
   "provider.unavailable.denied": "{tool} could not be run safely",
   "provider.unavailable.parse": "{tool} returned output Rain could not read",
-  "provider.unavailable.io": "{tool} could not be run"
+  "provider.unavailable.io": "{tool} could not be run",
+  "provider.unavailable.failed": "{tool} reported an error (is it running?)"
 }

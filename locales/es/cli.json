@@ -151,5 +151,6 @@
   "provider.unavailable.output-too-large": "{tool} devolvió demasiados datos",
   "provider.unavailable.denied": "{tool} no se pudo ejecutar de forma segura",
   "provider.unavailable.parse": "{tool} devolvió una salida que Rain no pudo leer",
-  "provider.unavailable.io": "No se pudo ejecutar {tool}"
+  "provider.unavailable.io": "No se pudo ejecutar {tool}",
+  "provider.unavailable.failed": "{tool} informó un error (¿está en ejecución?)"
 }
