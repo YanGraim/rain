@@ -1433,6 +1433,52 @@ mod engines_tests {
         assert!(!builtin().is_protected(&g.join("state.vscdb.bak-1")));
     }
 
+    // FR-004, FR-007: the whole Claude app VM folder (sessions, identity).
+    #[test]
+    fn claude_vm_bundles_is_protected() {
+        assert_engine_protected("Library/Application Support/Claude/vm_bundles");
+    }
+
+    // FR-004, FR-007: Claude app VM session data and identity.
+    #[test]
+    fn claude_vm_sessiondata_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Claude/vm_bundles/claudevm.bundle/sessiondata.img",
+        );
+    }
+
+    // FR-004, FR-007: Claude app VM session data and identity.
+    #[test]
+    fn claude_vm_machine_identifier_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Claude/vm_bundles/claudevm.bundle/machineIdentifier",
+        );
+    }
+
+    // FR-004, FR-007: Claude app VM session data and identity.
+    #[test]
+    fn claude_vm_gvisor_mac_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Claude/vm_bundles/claudevm.bundle/gvisorMacAddress",
+        );
+    }
+
+    // FR-004, FR-007: Claude app VM session data and identity.
+    #[test]
+    fn claude_vm_ip_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Claude/vm_bundles/claudevm.bundle/vmIP",
+        );
+    }
+
+    // FR-004, FR-007: Claude app VM session data and identity.
+    #[test]
+    fn claude_vm_cowork_adopted_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Claude/vm_bundles/claudevm.bundle/.cowork-adopted",
+        );
+    }
+
     // FR-007: the user data entries must not shadow the cache rules.
     #[test]
     fn claude_root_is_not_protected_and_cache_rules_still_find_items() {

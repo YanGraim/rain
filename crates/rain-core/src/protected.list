@@ -117,3 +117,11 @@
 
 # Cursor chat history and editor state (backups next to it are not covered).
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
+
+# Claude app VM: session data and machine identity (owner decision).
+~/Library/Application Support/Claude/vm_bundles
+~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/sessiondata.img
+~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/machineIdentifier
+~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/gvisorMacAddress
+~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/vmIP
+~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/.cowork-adopted
