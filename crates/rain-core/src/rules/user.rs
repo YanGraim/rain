@@ -1,6 +1,6 @@
 //! User-level caches and logs: every direct child of the root is an item.
 
-use super::children::ChildrenOf;
+use super::children::{ChildrenExcept, ChildrenOf};
 use crate::model::{Category, Risk, RuleId};
 use crate::rule::RuleMeta;
 use rain_platform::{Os, Root};
@@ -8,20 +8,25 @@ use rain_platform::{Os, Root};
 // FR-002: no age filter on these rules; the spec only ages `proj.node-modules`.
 
 /// `sys.user-caches`: contents of `~/Library/Caches`.
-pub static USER_CACHES: ChildrenOf = ChildrenOf {
-    meta: RuleMeta {
-        id: RuleId::new("sys.user-caches"),
-        category: Category::SystemCaches,
-        risk: Risk::Low,
-        name_key: "rule.sys.user-caches",
-        consequence_key: "rule.sys.user-caches.consequence",
-        default_selected: true,
-        requires_app_closed: None,
-        os: &[Os::Macos],
+/// `ms-playwright` is left to `pkg.playwright`, which keeps the newest
+/// browsers (seguranca, AI2f); this low, preselected rule must not offer them.
+pub static USER_CACHES: ChildrenExcept = ChildrenExcept {
+    skip: &["ms-playwright"],
+    inner: ChildrenOf {
+        meta: RuleMeta {
+            id: RuleId::new("sys.user-caches"),
+            category: Category::SystemCaches,
+            risk: Risk::Low,
+            name_key: "rule.sys.user-caches",
+            consequence_key: "rule.sys.user-caches.consequence",
+            default_selected: true,
+            requires_app_closed: None,
+            os: &[Os::Macos],
+        },
+        root: Root::Caches,
+        rels: &[""],
+        depth: 1,
     },
-    root: Root::Caches,
-    rels: &[""],
-    depth: 1,
 };
 
 /// `sys.logs`: contents of `~/Library/Logs`.
