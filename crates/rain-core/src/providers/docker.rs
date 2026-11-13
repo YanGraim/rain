@@ -86,7 +86,7 @@ pub(crate) fn parse_system_df(stdout: &str) -> Result<SystemDf, ParseError> {
 }
 
 /// FR-021: `docker images --filter dangling=true --format '{{json .}}'`.
-/// Images some container still uses are not items.
+/// Images some container uses, or whose use is unknown, are not items.
 pub(crate) fn parse_dangling_images(stdout: &str) -> Result<Vec<ProviderItem>, ParseError> {
     let mut items = Vec::new();
     for obj in objects(stdout)? {
@@ -96,7 +96,8 @@ pub(crate) fn parse_dangling_images(stdout: &str) -> Result<Vec<ProviderItem>, P
         }
         let size = parse_decimal_size(text(&obj, "Size")?)?;
         let in_use = match text(&obj, "Containers")? {
-            "N/A" => false,
+            // Unknown use: fail closed, it may still back a container.
+            "N/A" => true,
             n if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
                 n.bytes().any(|b| b != b'0')
             }
@@ -186,13 +187,15 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(
-            got,
-            [
-                ("0a1b2c3d4e5f", "0a1b2c3d4e5f", 1_250_000_000, 0),
-                ("ffeeddccbbaa", "ffeeddccbbaa", 12_300, 0),
-            ]
-        );
+        assert_eq!(got, [("0a1b2c3d4e5f", "0a1b2c3d4e5f", 1_250_000_000, 0)]);
+    }
+
+    // ADR 0004 §3: `N/A` means use is unknown; fail closed, not an item.
+    #[test]
+    fn dangling_image_unknown_use_is_not_an_item() {
+        let line = DANGLING_SYN.lines().nth(1).unwrap();
+        assert!(line.contains("\"Containers\":\"N/A\""));
+        assert_eq!(parse_dangling_images(line), Ok(Vec::new()));
     }
 
     // ADR 0004 §3: ids must be 12 or 64 lower-case hex; anything else fails.

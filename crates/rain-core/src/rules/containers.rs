@@ -168,4 +168,8 @@ impl ProviderRule for DanglingImages {
     fn act(&self, _: &ProviderItem) -> Option<ToolCall> {
         None
     }
+    /// `containers.unused-images` already counts dangling images.
+    fn counted_elsewhere(&self) -> bool {
+        true
+    }
 }

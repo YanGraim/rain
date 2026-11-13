@@ -462,8 +462,14 @@ fn report(
     let total_bytes = items
         .iter()
         .fold(0u64, |acc, i| acc.saturating_add(i.allocated_bytes));
+    let elsewhere: BTreeSet<RuleId> = rules
+        .iter()
+        .filter(|r| matches!(r.kind(), RuleKind::Provider(p) if p.counted_elsewhere()))
+        .map(|r| r.meta().id)
+        .collect();
     let tool_total_bytes = tool_items
         .iter()
+        .filter(|i| !elsewhere.contains(&i.rule))
         .fold(0u64, |acc, i| acc.saturating_add(i.reported_bytes));
     ScanReport {
         schema_version: SCHEMA_VERSION,
