@@ -219,6 +219,8 @@ pub const CATALOGUE_RULE_IDS: &[&str] = &[
     "ai.windsurf.cache",
     "ai.cursor.state-backups",
     "ai.claude-desktop.cache",
+    "ai.vscode.old-extensions",
+    "ai.cursor.old-extensions",
     "ai.copilot.cache",
     "ai.codex.cache",
     "ai.gemini.cache",

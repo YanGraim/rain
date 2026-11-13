@@ -244,3 +244,56 @@ fn claude_desktop_cache_found_in_fixture() {
         Some("com.anthropic.claudefordesktop")
     );
 }
+
+// AI2e: keep the newest version per extension (and target); list only the
+// older folders. Single versions, extensions.json, .obsolete, unparseable
+// names and any group with an unparseable version are never listed.
+#[test]
+fn old_extensions_found_in_fixture() {
+    let (got, report) = scan_fixture(
+        "extensions",
+        &["ai.vscode.old-extensions", "ai.cursor.old-extensions"],
+    );
+    let v = ".vscode/extensions";
+    let want: Vec<(String, PathBuf)> = [
+        (
+            "ai.vscode.old-extensions",
+            format!("{v}/ms-python.python-2024.1.0"),
+        ),
+        (
+            "ai.vscode.old-extensions",
+            format!("{v}/ms-python.python-2024.2.0"),
+        ),
+        (
+            "ai.vscode.old-extensions",
+            format!("{v}/rust-lang.rust-analyzer-0.3.1-darwin-arm64"),
+        ),
+        (
+            "ai.cursor.old-extensions",
+            ".cursor/extensions/anysphere.x-1.0.0".to_string(),
+        ),
+    ]
+    .into_iter()
+    .map(|(r, p)| (r.to_string(), PathBuf::from(p)))
+    .collect();
+    let mut got = got;
+    got.sort_by(|a, b| {
+        (a.0 != "ai.vscode.old-extensions", &a.1).cmp(&(b.0 != "ai.vscode.old-extensions", &b.1))
+    });
+    assert_eq!(got, want);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
+
+// FR-014, FR-015: medium, not preselected, editor closed.
+#[test]
+fn old_extensions_medium_not_default_app_closed() {
+    for (id, app) in [
+        ("ai.vscode.old-extensions", "com.microsoft.VSCode"),
+        ("ai.cursor.old-extensions", "com.todesktop.230313mzl4w4u92"),
+    ] {
+        let m = meta(id);
+        assert_eq!(m.risk, Risk::Medium, "{id}");
+        assert!(!m.default_selected, "{id}");
+        assert_eq!(m.requires_app_closed, Some(app), "{id}");
+    }
+}
