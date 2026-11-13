@@ -202,3 +202,45 @@ fn copilot_cache_found_in_fixture() {
     assert_eq!(m.risk, Risk::Medium);
     assert!(!m.default_selected);
 }
+
+// FR-001, FR-004: only the backup copies; the live `state.vscdb` (chat
+// history), its WAL and folders are never listed.
+#[test]
+fn cursor_state_backups_found_in_fixture() {
+    let (got, _) = scan_fixture("cursor", &["ai.cursor.state-backups"]);
+    let g = Path::new(AS).join("Cursor/User/globalStorage");
+    let id = "ai.cursor.state-backups".to_string();
+    assert_eq!(
+        got,
+        [
+            (id.clone(), g.join("state.vscdb.backup")),
+            (id, g.join("state.vscdb.bak-20260101")),
+        ]
+    );
+    let m = meta("ai.cursor.state-backups");
+    assert_eq!(m.risk, Risk::Medium);
+    assert!(!m.default_selected);
+    assert_eq!(m.requires_app_closed, Some("com.todesktop.230313mzl4w4u92"));
+}
+
+// FR-001, FR-015: Claude desktop Chromium caches only.
+#[test]
+fn claude_desktop_cache_found_in_fixture() {
+    let c = Path::new(AS).join("Claude");
+    let id = "ai.claude-desktop.cache".to_string();
+    assert_eq!(
+        only("ai.claude-desktop.cache"),
+        [
+            (id.clone(), c.join("Cache/c")),
+            (id.clone(), c.join("Code Cache/js")),
+            (id, c.join("GPUCache/c")),
+        ]
+    );
+    let m = meta("ai.claude-desktop.cache");
+    assert_eq!(m.risk, Risk::Low);
+    assert!(m.default_selected);
+    assert_eq!(
+        m.requires_app_closed,
+        Some("com.anthropic.claudefordesktop")
+    );
+}
