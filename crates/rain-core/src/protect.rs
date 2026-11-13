@@ -1417,6 +1417,22 @@ mod engines_tests {
         assert_engine_protected(".codex/auth.json");
     }
 
+    // FR-004, FR-007: Cursor chat history.
+    #[test]
+    fn cursor_state_vscdb_is_protected() {
+        assert_engine_protected(
+            "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+        );
+    }
+
+    // FR-007: protecting state.vscdb must not cover its backup siblings.
+    #[test]
+    fn cursor_state_backup_is_not_protected() {
+        let g = Path::new(HOME).join("Library/Application Support/Cursor/User/globalStorage");
+        assert!(!builtin().is_protected(&g.join("state.vscdb.backup")));
+        assert!(!builtin().is_protected(&g.join("state.vscdb.bak-1")));
+    }
+
     // FR-007: the user data entries must not shadow the cache rules.
     #[test]
     fn claude_root_is_not_protected_and_cache_rules_still_find_items() {

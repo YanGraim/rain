@@ -114,3 +114,6 @@
 ~/.config/github-copilot/hosts.json
 ~/.config/github-copilot/apps.json
 ~/.codex/auth.json
+
+# Cursor chat history and editor state (backups next to it are not covered).
+~/Library/Application Support/Cursor/User/globalStorage/state.vscdb

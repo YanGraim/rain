@@ -284,6 +284,8 @@ mod tests {
                     "apple.derived-data"
                         | "ai.cursor.cache"
                         | "ai.cursor.workspace-storage"
+                        | "ai.cursor.state-backups"
+                        | "ai.claude-desktop.cache"
                         | "ai.windsurf.cache"
                         | "apple.archives"
                         | "apple.device-support"
@@ -388,6 +390,8 @@ mod tests {
                 "ai.cursor.cache",
                 "ai.windsurf.cache",
                 "ai.cursor.workspace-storage",
+                "ai.cursor.state-backups",
+                "ai.claude-desktop.cache",
                 "ai.codex.cache",
                 "ai.gemini.cache",
                 "ai.continue.cache",

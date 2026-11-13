@@ -2,8 +2,9 @@
 //! and history are user data (FR-004) and never appear here.
 
 use super::children::{ChildDirsOf, ChildrenOf};
+use crate::fs::Fs;
 use crate::model::{Category, Risk, RuleId};
-use crate::rule::{Rule, RuleMeta};
+use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
 use rain_platform::{Os, Root};
 
 // ADR 0005: listed before `sys.user-caches`, so `claude-cli-nodejs` in
@@ -14,6 +15,8 @@ pub(super) static RULES: &[&dyn Rule] = &[
     &CURSOR_CACHE,
     &WINDSURF_CACHE,
     &CURSOR_WORKSPACE_STORAGE,
+    &CURSOR_STATE_BACKUPS,
+    &CLAUDE_DESKTOP_CACHE,
     &CODEX_CACHE,
     &GEMINI_CACHE,
     &CONTINUE_CACHE,
@@ -210,4 +213,83 @@ static COPILOT_CACHE: ChildDirsOf = ChildDirsOf {
     },
     root: Root::Home,
     rels: &[".config/github-copilot"],
+};
+
+const CURSOR_ID: &str = "com.todesktop.230313mzl4w4u92";
+
+/// FR-001: backup copies of Cursor's state database, which grow large.
+/// Only plain files named `state.vscdb.backup` or `state.vscdb.bak-*`; the
+/// live `state.vscdb` (chat history) is also in the protect list (FR-004).
+static CURSOR_STATE_BACKUPS: CursorStateBackups = CursorStateBackups {
+    meta: RuleMeta {
+        id: RuleId::new("ai.cursor.state-backups"),
+        category: Category::AiTools,
+        risk: Risk::Medium,
+        name_key: "rule.ai.cursor.state-backups",
+        consequence_key: "rule.ai.cursor.state-backups.consequence",
+        default_selected: false,
+        requires_app_closed: Some(CURSOR_ID),
+        os: &[Os::Macos],
+    },
+};
+
+struct CursorStateBackups {
+    meta: RuleMeta,
+}
+
+impl CursorStateBackups {
+    fn is_backup(name: &str) -> bool {
+        name == "state.vscdb.backup" || name.starts_with("state.vscdb.bak-")
+    }
+}
+
+impl Rule for CursorStateBackups {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Files(self)
+    }
+}
+
+impl FileRule for CursorStateBackups {
+    fn roots(&self, _: &RuleContext) -> Vec<RootedPath> {
+        vec![RootedPath::Under(
+            Root::Home,
+            "Library/Application Support/Cursor/User/globalStorage",
+        )]
+    }
+    fn visit(&self, entry: &EntryInfo, depth: usize, _: &RuleContext, _: &dyn Fs) -> Visit {
+        if depth == 0 {
+            return Visit::Descend;
+        }
+        let name = entry.path.file_name().and_then(|n| n.to_str());
+        if !entry.meta.is_dir && name.is_some_and(Self::is_backup) {
+            Visit::Candidate
+        } else {
+            Visit::Skip
+        }
+    }
+}
+
+/// FR-001, FR-015: Claude desktop Chromium caches. Config and VM bundles
+/// in the same folder are not listed.
+static CLAUDE_DESKTOP_CACHE: ChildrenOf = ChildrenOf {
+    meta: RuleMeta {
+        id: RuleId::new("ai.claude-desktop.cache"),
+        category: Category::AiTools,
+        risk: Risk::Low,
+        name_key: "rule.ai.claude-desktop.cache",
+        consequence_key: "rule.ai.claude-desktop.cache.consequence",
+        default_selected: true,
+        requires_app_closed: Some("com.anthropic.claudefordesktop"),
+        os: &[Os::Macos],
+    },
+    root: Root::Home,
+    rels: &[
+        "Library/Application Support/Claude/Cache",
+        "Library/Application Support/Claude/Code Cache",
+        "Library/Application Support/Claude/GPUCache",
+    ],
+    depth: 1,
 };
