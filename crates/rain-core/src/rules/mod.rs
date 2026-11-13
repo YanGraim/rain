@@ -7,6 +7,7 @@ mod apple;
 mod browser;
 mod children;
 mod containers;
+mod extensions;
 mod macos;
 mod models;
 mod node_modules;
@@ -286,6 +287,8 @@ mod tests {
                         | "ai.cursor.workspace-storage"
                         | "ai.cursor.state-backups"
                         | "ai.claude-desktop.cache"
+                        | "ai.vscode.old-extensions"
+                        | "ai.cursor.old-extensions"
                         | "ai.windsurf.cache"
                         | "apple.archives"
                         | "apple.device-support"
@@ -392,6 +395,8 @@ mod tests {
                 "ai.cursor.workspace-storage",
                 "ai.cursor.state-backups",
                 "ai.claude-desktop.cache",
+                "ai.vscode.old-extensions",
+                "ai.cursor.old-extensions",
                 "ai.codex.cache",
                 "ai.gemini.cache",
                 "ai.continue.cache",

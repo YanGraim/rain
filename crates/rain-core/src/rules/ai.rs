@@ -17,6 +17,8 @@ pub(super) static RULES: &[&dyn Rule] = &[
     &CURSOR_WORKSPACE_STORAGE,
     &CURSOR_STATE_BACKUPS,
     &CLAUDE_DESKTOP_CACHE,
+    &super::extensions::VSCODE_OLD_EXTENSIONS,
+    &super::extensions::CURSOR_OLD_EXTENSIONS,
     &CODEX_CACHE,
     &GEMINI_CACHE,
     &CONTINUE_CACHE,
