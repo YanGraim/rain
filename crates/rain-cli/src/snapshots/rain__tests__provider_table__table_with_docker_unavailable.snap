@@ -1,0 +1,10 @@
+---
+source: crates/rain-cli/src/main.rs
+assertion_line: 776
+expression: "table(&fake(failed, FakeReply::Error(ToolError::NotInstalled)))"
+---
+Rule      Path                             Size
+sys.logs  /Users/t/Library/Logs/old.log  1.0 kB
+Total                                    1.0 kB
+Docker is not installed
+Docker reported an error (is it running?)

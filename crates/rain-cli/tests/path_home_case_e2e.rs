@@ -23,7 +23,8 @@ fn path_with_different_case_is_inside_home() {
     std::fs::create_dir_all(home.join("Code")).expect("mkdir");
     for p in [dir.path().join("home"), dir.path().join("HOME/code")] {
         let out = Command::new(env!("CARGO_BIN_EXE_rain"))
-            .args(["scan", "--path"])
+            // File rules only: tests never run real Docker (ADR 0004).
+            .args(["scan", "--rule", "proj.node-modules", "--path"])
             .arg(&p)
             .env("HOME", &home)
             .env_remove("SUDO_UID")

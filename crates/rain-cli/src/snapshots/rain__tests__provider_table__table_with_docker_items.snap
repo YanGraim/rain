@@ -1,0 +1,15 @@
+---
+source: crates/rain-cli/src/main.rs
+assertion_line: 764
+expression: "table(&fake(ok(DF), ok(DANGLING)))"
+---
+Rule                        Path                               Size
+sys.logs                    /Users/t/Library/Logs/old.log    1.0 kB
+containers.build-cache      build-cache                    305.7 MB
+containers.dangling-images  0a1b2c3d4e5f                     1.3 GB
+containers.stopped          stopped                         31.4 MB
+containers.unused-images    unused-images                    4.6 GB
+containers.volumes          unused-volumes                   1.7 GB
+Total                                                        1.0 kB
+Inside tools                                                 6.6 GB
+Reported by the tool itself. Freeing it may not free the same space on your disk.

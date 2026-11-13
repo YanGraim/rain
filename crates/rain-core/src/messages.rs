@@ -105,6 +105,7 @@ pub enum MessageKey {
     ProviderUnavailableDenied,
     ProviderUnavailableParse,
     ProviderUnavailableIo,
+    ProviderUnavailableFailed,
 }
 
 impl MessageKey {
@@ -152,6 +153,7 @@ impl MessageKey {
         MessageKey::ProviderUnavailableDenied,
         MessageKey::ProviderUnavailableParse,
         MessageKey::ProviderUnavailableIo,
+        MessageKey::ProviderUnavailableFailed,
     ];
 
     /// Key as written in the locale file.
@@ -202,6 +204,7 @@ impl MessageKey {
             MessageKey::ProviderUnavailableDenied => "provider.unavailable.denied",
             MessageKey::ProviderUnavailableParse => "provider.unavailable.parse",
             MessageKey::ProviderUnavailableIo => "provider.unavailable.io",
+            MessageKey::ProviderUnavailableFailed => "provider.unavailable.failed",
         }
     }
 }

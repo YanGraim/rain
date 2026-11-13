@@ -2,6 +2,7 @@
 
 mod args;
 mod output;
+mod tools;
 
 use args::{Command, InvalidPath, OutsideHome, ScanArgs};
 use output::escape_for_terminal;
@@ -13,6 +14,7 @@ use rain_core::planner::{self, ResolvedRoots, ScanContext, ScanError};
 use rain_core::protect::{ProtectError, ProtectList};
 use rain_core::rule::{Rule, RuleContext};
 use rain_core::rules;
+use rain_core::tools::ToolRunner;
 use rain_platform::{Platform, PlatformError, Root};
 use signal_hook::consts::SIGINT;
 use signal_hook::flag;
@@ -63,6 +65,8 @@ struct Env<'a> {
     platform: &'a dyn Platform,
     fs: &'a dyn Fs,
     clock: &'a dyn Clock,
+    /// Runs external tools for provider rules (ADR 0004).
+    tools: &'a dyn ToolRunner,
     /// Base for relative `--path` values.
     cwd: PathBuf,
 }
@@ -123,7 +127,7 @@ fn run_scan(
             user_paths,
             now: env.clock.now(),
         },
-        tools: &rain_core::tools::NoTools,
+        tools: env.tools,
         threads: None,
     };
     planner::scan(&selected, &ctx, cancel).map_err(|e| match e {
@@ -251,10 +255,15 @@ fn main() -> anyhow::Result<ExitCode> {
     };
     let cwd = std::env::current_dir()?;
     let result = real_platform(&catalog).and_then(|platform| {
+        let home = platform
+            .resolve(Root::Home)
+            .map_err(|e| CliError::Runtime(home_error_message(&e, &catalog)))?;
+        let tools = tools::PlatformTools::new(home);
         let env = Env {
             platform: platform.as_ref(),
             fs: &StdFs,
             clock: &SystemClock,
+            tools: &tools,
             cwd,
         };
         scan_output(&scan, &env, &catalog, &cancel)
@@ -348,6 +357,7 @@ mod tests {
             platform,
             fs,
             clock: &clock(),
+            tools: &rain_core::tools::NoTools,
             cwd: PathBuf::from(HOME),
         };
         let catalog = Catalog::en().unwrap();
@@ -527,6 +537,7 @@ mod tests {
             platform: &p,
             fs: &fs,
             clock: &clock(),
+            tools: &rain_core::tools::NoTools,
             cwd: PathBuf::from(HOME),
         };
         let catalog = Catalog::en().unwrap();
@@ -606,6 +617,7 @@ mod tests {
             platform: &p,
             fs: &fs,
             clock: &clock(),
+            tools: &rain_core::tools::NoTools,
             cwd: PathBuf::from(HOME),
         };
         let catalog = Catalog::en().unwrap();
@@ -703,5 +715,87 @@ mod tests {
                 reason: SkipReason::Protected,
             }]
         );
+    }
+
+    mod provider_table {
+        use super::*;
+        use rain_core::tools::{
+            ExitStatusKind, FakeReply, FakeToolRunner, ToolError, ToolId, ToolOutput,
+        };
+
+        const DF_ARGS: &[&str] = &["system", "df", "--format", "{{json .}}"];
+        const IMAGES_ARGS: &[&str] = &[
+            "images",
+            "--filter",
+            "dangling=true",
+            "--format",
+            "{{json .}}",
+        ];
+        const DF: &str = include_str!("../../rain-core/tests/fixtures/docker/system_df.jsonl");
+        const DANGLING: &str =
+            include_str!("../../rain-core/tests/fixtures/docker/images_dangling_synthetic.jsonl");
+
+        fn table(tools: &FakeToolRunner) -> String {
+            let fs = home_fs();
+            let p = platform(Some(HOME));
+            let env = Env {
+                platform: &p,
+                fs: &fs,
+                clock: &clock(),
+                tools,
+                cwd: PathBuf::from(HOME),
+            };
+            let argv = [
+                "--rule",
+                "sys.logs",
+                "--rule",
+                "containers.build-cache",
+                "--rule",
+                "containers.dangling-images",
+                "--rule",
+                "containers.stopped",
+                "--rule",
+                "containers.unused-images",
+                "--rule",
+                "containers.volumes",
+            ];
+            scan_output(
+                &args(&argv),
+                &env,
+                &Catalog::en().unwrap(),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        }
+
+        fn fake(df: FakeReply, images: FakeReply) -> FakeToolRunner {
+            let mut fake = FakeToolRunner::new();
+            fake.reply(ToolId::Docker, DF_ARGS, df)
+                .reply(ToolId::Docker, IMAGES_ARGS, images);
+            fake
+        }
+
+        // FR-021, E7: container items appear with the tool's sizes; their
+        // total is separate from the disk total.
+        #[test]
+        fn table_with_docker_items() {
+            let ok = |s: &str| FakeReply::Output(ToolOutput::success(s));
+            insta::assert_snapshot!(table(&fake(ok(DF), ok(DANGLING))));
+        }
+
+        // FR-022, criterion 7: a stopped daemon shows "unavailable" and the
+        // scan still succeeds.
+        #[test]
+        fn table_with_docker_unavailable() {
+            let failed = FakeReply::Output(ToolOutput {
+                status: ExitStatusKind::Code(1),
+                stdout: String::new(),
+                stderr_len: 40,
+            });
+            insta::assert_snapshot!(table(&fake(
+                failed,
+                FakeReply::Error(ToolError::NotInstalled)
+            )));
+        }
     }
 }
