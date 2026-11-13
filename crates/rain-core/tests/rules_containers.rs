@@ -49,6 +49,10 @@ impl Platform for Home {
 }
 
 fn run(tools: &dyn ToolRunner) -> ScanReport {
+    run_ids(tools, &IDS)
+}
+
+fn run_ids(tools: &dyn ToolRunner, ids: &[&str]) -> ScanReport {
     let fs = FakeFs::new();
     let protect = ProtectList::builtin(&Home).unwrap();
     let roots = ResolvedRoots {
@@ -68,7 +72,7 @@ fn run(tools: &dyn ToolRunner) -> ScanReport {
         tools,
         threads: Some(1),
     };
-    scan(&rules::select(&IDS).unwrap(), &ctx, &AtomicBool::new(false)).unwrap()
+    scan(&rules::select(ids).unwrap(), &ctx, &AtomicBool::new(false)).unwrap()
 }
 
 fn fake(df: FakeReply, images: FakeReply) -> FakeToolRunner {
@@ -208,4 +212,19 @@ fn corrupt_output_is_unavailable() {
         statuses(&report),
         [ToolStatus::Unavailable(Unavailable::Parse); 5]
     );
+}
+
+// Dangling bytes leave the total only when unused-images is in this scan
+// and reported them; selected alone they count.
+#[test]
+fn dangling_alone_counts_in_total() {
+    let report = run_ids(&fake(ok(DF), ok(DANGLING)), &["containers.dangling-images"]);
+    assert_eq!(report.tool_total_bytes, 1_250_000_000);
+}
+
+// If `system df` fails, unused-images reports nothing: dangling bytes count.
+#[test]
+fn dangling_counts_when_system_df_fails() {
+    let report = run(&fake(FakeReply::Error(ToolError::Timeout), ok(DANGLING)));
+    assert_eq!(report.tool_total_bytes, 1_250_000_000);
 }
