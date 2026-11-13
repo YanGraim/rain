@@ -238,6 +238,7 @@ pub const CATALOGUE_RULE_IDS: &[&str] = &[
     "containers.unused-images",
     "containers.volumes",
     "pkg.npm",
+    "pkg.npx",
     "pkg.yarn",
     "pkg.bun",
     "pkg.pip",
