@@ -462,9 +462,15 @@ fn report(
     let total_bytes = items
         .iter()
         .fold(0u64, |acc, i| acc.saturating_add(i.allocated_bytes));
+    let reported: BTreeSet<RuleId> = tool_items.iter().map(|i| i.rule).collect();
     let elsewhere: BTreeSet<RuleId> = rules
         .iter()
-        .filter(|r| matches!(r.kind(), RuleKind::Provider(p) if p.counted_elsewhere()))
+        .filter(|r| match r.kind() {
+            RuleKind::Provider(p) => p
+                .counted_in()
+                .is_some_and(|other| reported.contains(&other)),
+            RuleKind::Files(_) => false,
+        })
         .map(|r| r.meta().id)
         .collect();
     let tool_total_bytes = tool_items

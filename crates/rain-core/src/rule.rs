@@ -104,9 +104,10 @@ pub trait ProviderRule: Send + Sync {
     fn roots(&self) -> Vec<RootedPath> {
         Vec::new()
     }
-    /// `true` when another rule's items already include these bytes, so
-    /// they stay out of `tool_total_bytes` (still shown per item).
-    fn counted_elsewhere(&self) -> bool {
-        false
+    /// Another rule whose items already include these bytes. They stay out
+    /// of `tool_total_bytes` only if that rule is in the same scan and
+    /// reported at least one item; otherwise they count here.
+    fn counted_in(&self) -> Option<RuleId> {
+        None
     }
 }
