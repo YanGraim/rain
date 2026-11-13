@@ -109,7 +109,6 @@ fn docker_rules_report_recorded_output() {
                 "0a1b2c3d4e5f".into(),
                 1_250_000_000
             ),
-            ("containers.dangling-images", "ffeeddccbbaa".into(), 12_300),
             ("containers.stopped", "stopped".into(), 31_350_000),
             (
                 "containers.unused-images",
@@ -120,6 +119,11 @@ fn docker_rules_report_recorded_output() {
         ]
     );
     assert_eq!(statuses(&report), [ToolStatus::Ok; 5]);
+    // Dangling images are already inside unused-images: counted once.
+    assert_eq!(
+        report.tool_total_bytes,
+        305_700_000 + 31_350_000 + 4_630_000_000 + 1_660_000_000
+    );
     // FR-020: nothing on disk is measured or listed.
     assert!(report.items.is_empty());
     assert_eq!(report.total_bytes, 0);
