@@ -72,6 +72,41 @@ impl FileRule for ChildDirsOf {
     }
 }
 
+/// [`ChildrenOf`] at depth 1 that never lists the direct children named in
+/// `skip`: folders another, more careful rule owns entirely.
+pub struct ChildrenExcept {
+    pub(super) inner: ChildrenOf,
+    pub(super) skip: &'static [&'static str],
+}
+
+impl Rule for ChildrenExcept {
+    fn meta(&self) -> &RuleMeta {
+        &self.inner.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Files(self)
+    }
+}
+
+impl FileRule for ChildrenExcept {
+    fn roots(&self, ctx: &RuleContext) -> Vec<RootedPath> {
+        self.inner.roots(ctx)
+    }
+    fn visit(&self, entry: &EntryInfo, depth: usize, ctx: &RuleContext, fs: &dyn Fs) -> Visit {
+        let skipped = depth == 1
+            && entry
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| self.skip.contains(&n));
+        if skipped {
+            Visit::Skip
+        } else {
+            self.inner.visit(entry, depth, ctx, fs)
+        }
+    }
+}
+
 /// A rule whose items are the folders `Under(root, rel)` themselves.
 pub struct DirItself {
     pub(super) meta: RuleMeta,

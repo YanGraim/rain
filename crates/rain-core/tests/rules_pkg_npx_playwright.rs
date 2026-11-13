@@ -142,15 +142,31 @@ fn playwright_lists_only_older_revisions() {
     assert!(!m.default_selected);
 }
 
-// ADR 0005: the old revisions belong to pkg.playwright, not sys.user-caches.
+// ADR 0005, seguranca: nothing under ms-playwright comes from
+// sys.user-caches (it would offer the newest browsers), and the newest
+// revisions are never listed by any rule.
 #[test]
 fn playwright_wins_over_user_caches() {
+    let pw = Path::new("Library/Caches/ms-playwright");
     let got = found(&["pkg.playwright", "sys.user-caches"]);
-    let old = PathBuf::from("Library/Caches/ms-playwright/chromium-1140");
-    let owners: Vec<_> = got
+    for (rule, path) in &got {
+        if path.starts_with(pw) {
+            assert_eq!(rule, "pkg.playwright", "{path:?}");
+        }
+    }
+    for newest in [
+        "chromium-1148",
+        "chromium_headless_shell-1148",
+        "webkit-2104",
+        "firefox-1466",
+        "ffmpeg-1010",
+    ] {
+        assert!(
+            got.iter().all(|(_, p)| p != &pw.join(newest)),
+            "{newest} listed"
+        );
+    }
+    assert!(got
         .iter()
-        .filter(|(_, p)| p == &old)
-        .map(|(r, _)| r.as_str())
-        .collect();
-    assert_eq!(owners, ["pkg.playwright"]);
+        .any(|(r, p)| r == "pkg.playwright" && p == &pw.join("chromium-1140")));
 }
