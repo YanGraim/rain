@@ -1,0 +1,48 @@
+# The scan must never write to disk. Every filesystem mutation is banned here;
+# production code that genuinely needs one (e.g. moving to the Trash) must opt
+# in with a scoped `#[allow(clippy::disallowed_methods)]` and a justification.
+# Test modules that build fixtures inside a `tempfile` sandbox opt in the same way.
+disallowed-methods = [
+    { path = "std::fs::write", reason = "scan is read-only" },
+    { path = "std::fs::remove_file", reason = "scan is read-only; deletions go through the Trash" },
+    { path = "std::fs::remove_dir", reason = "scan is read-only; deletions go through the Trash" },
+    { path = "std::fs::remove_dir_all", reason = "scan is read-only; deletions go through the Trash" },
+    { path = "std::fs::rename", reason = "scan is read-only" },
+    { path = "std::fs::create_dir", reason = "scan is read-only" },
+    { path = "std::fs::create_dir_all", reason = "scan is read-only" },
+    { path = "std::fs::copy", reason = "scan is read-only" },
+    { path = "std::fs::hard_link", reason = "scan is read-only" },
+    { path = "std::fs::set_permissions", reason = "scan is read-only" },
+    { path = "std::fs::File::create", reason = "scan is read-only" },
+    { path = "std::fs::File::create_new", reason = "scan is read-only" },
+    { path = "std::fs::File::options", reason = "may open files for writing" },
+    { path = "std::fs::File::set_len", reason = "scan is read-only" },
+    { path = "std::fs::OpenOptions::new", reason = "may open files for writing" },
+    { path = "std::fs::soft_link", reason = "scan is read-only" },
+    { path = "std::fs::set_times", reason = "scan is read-only" },
+    { path = "std::fs::set_permissions_nofollow", reason = "scan is read-only" },
+    { path = "std::fs::File::set_permissions", reason = "scan is read-only" },
+    { path = "std::fs::File::set_times", reason = "scan is read-only" },
+    { path = "std::fs::File::set_modified", reason = "scan is read-only" },
+    { path = "std::fs::DirBuilder::create", reason = "scan is read-only" },
+    { path = "std::os::unix::fs::symlink", reason = "scan is read-only" },
+    { path = "std::os::unix::fs::chown", reason = "scan is read-only" },
+    { path = "std::os::unix::fs::lchown", reason = "scan is read-only" },
+    { path = "std::os::unix::fs::fchown", reason = "scan is read-only" },
+    { path = "std::os::unix::fs::chroot", reason = "scan is read-only" },
+    # Spawning a process can do anything, including writing to disk.
+    { path = "std::process::Command::new", reason = "external processes bypass the read-only guarantee" },
+    # NFR-006: the scan is offline; no sockets.
+    { path = "std::net::TcpStream::connect", reason = "rain never uses the network" },
+    { path = "std::net::TcpStream::connect_timeout", reason = "rain never uses the network" },
+    { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "does a DNS lookup; rain never uses the network" },
+    { path = "std::net::UdpSocket::bind", reason = "rain never uses the network" },
+    { path = "std::net::TcpListener::bind", reason = "rain never uses the network" },
+]
+
+# The package file replaces the root one, so everything above is a copy of
+# it (a test keeps them in sync). The core never spawns processes; tools run
+# through ToolRunner in rain-platform.
+disallowed-types = [
+    { path = "std::process::Command", reason = "core never spawns processes; tools run through ToolRunner in rain-platform" },
+]
