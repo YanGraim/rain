@@ -37,6 +37,8 @@
   "rule.ai.claude-code.cache.consequence": "O Claude Code recria esses arquivos sozinho. O conteúdo colado se perde ao retomar conversas antigas. Suas sessões e histórico não são tocados.",
   "rule.ai.claude-code.logs": "Claude Code: logs de depuração",
   "rule.ai.claude-code.logs.consequence": "Você perde os logs de depuração antigos. O Claude Code continua funcionando normalmente.",
+  "rule.ai.claude-code.old-versions": "Claude Code: versões antigas",
+  "rule.ai.claude-code.old-versions.consequence": "Versões antigas do Claude Code (cerca de {size}). A versão em uso fica; voltar para uma antiga exige reinstalar.",
   "rule.ai.cursor.cache": "Cursor: cache",
   "rule.ai.cursor.cache.consequence": "O Cursor refaz o cache e pode abrir mais devagar na primeira vez. Feche o Cursor antes.",
   "rule.ai.cursor.workspace-storage": "Cursor: estado de workspaces antigos",

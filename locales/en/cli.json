@@ -37,6 +37,8 @@
   "rule.ai.claude-code.cache.consequence": "Claude Code recreates these on its own. Pasted content is lost when you resume old conversations. Your sessions and history are not touched.",
   "rule.ai.claude-code.logs": "Claude Code: debug logs",
   "rule.ai.claude-code.logs.consequence": "You lose old debug logs. Claude Code keeps working normally.",
+  "rule.ai.claude-code.old-versions": "Claude Code: old versions",
+  "rule.ai.claude-code.old-versions.consequence": "Old Claude Code versions (about {size}). The version in use stays; going back to an old one means reinstalling it.",
   "rule.ai.cursor.cache": "Cursor: cache",
   "rule.ai.cursor.cache.consequence": "Cursor rebuilds its cache and may open slower the first time. Close Cursor first.",
   "rule.ai.cursor.workspace-storage": "Cursor: old workspace state",
