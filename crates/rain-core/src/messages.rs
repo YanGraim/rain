@@ -214,6 +214,7 @@ impl MessageKey {
 pub const CATALOGUE_RULE_IDS: &[&str] = &[
     "ai.claude-code.cache",
     "ai.claude-code.logs",
+    "ai.claude-code.old-versions",
     "ai.cursor.cache",
     "ai.cursor.workspace-storage",
     "ai.windsurf.cache",

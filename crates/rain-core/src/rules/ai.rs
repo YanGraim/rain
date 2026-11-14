@@ -2,16 +2,18 @@
 //! and history are user data (FR-004) and never appear here.
 
 use super::children::{ChildDirsOf, ChildrenOf};
-use crate::fs::Fs;
+use crate::fs::{Fs, Metadata};
 use crate::model::{Category, Risk, RuleId};
 use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
 use rain_platform::{Os, Root};
+use std::path::Path;
 
 // ADR 0005: listed before `sys.user-caches`, so `claude-cli-nodejs` in
 // `~/Library/Caches` belongs to this rule.
 pub(super) static RULES: &[&dyn Rule] = &[
     &CLAUDE_CODE_CACHE,
     &CLAUDE_CODE_LOGS,
+    &CLAUDE_CODE_OLD_VERSIONS,
     &CURSOR_CACHE,
     &WINDSURF_CACHE,
     &CURSOR_WORKSPACE_STORAGE,
@@ -67,6 +69,104 @@ static CLAUDE_CODE_LOGS: ChildrenOf = ChildrenOf {
     rels: &[".claude/debug"],
     depth: 1,
 };
+
+/// AI2d: Claude Code CLI binaries in `~/.local/share/claude/versions`.
+/// The one `~/.local/bin/claude` points at and the highest version stay;
+/// without a symlink that resolves into the folder nothing is listed.
+static CLAUDE_CODE_OLD_VERSIONS: OldVersions = OldVersions {
+    meta: RuleMeta {
+        id: RuleId::new("ai.claude-code.old-versions"),
+        category: Category::AiTools,
+        risk: Risk::Medium,
+        name_key: "rule.ai.claude-code.old-versions",
+        consequence_key: "rule.ai.claude-code.old-versions.consequence",
+        default_selected: false,
+        requires_app_closed: None,
+        os: &[Os::Macos],
+    },
+};
+
+/// Home-relative folder of the binaries, and the launcher symlink.
+const VERSIONS_REL: &str = ".local/share/claude/versions";
+const LAUNCHER_REL: &str = ".local/bin/claude";
+
+struct OldVersions {
+    meta: RuleMeta,
+}
+
+impl Rule for OldVersions {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Files(self)
+    }
+}
+
+/// Strict `N.N.N`: digits only, three components.
+fn semver(name: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = name.split('.');
+    let mut next = || {
+        let p = parts.next()?;
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        p.parse::<u64>().ok()
+    };
+    let v = (next()?, next()?, next()?);
+    parts.next().is_none().then_some(v)
+}
+
+/// A plain, visible, single-link file with a strict semver name.
+fn version_of(path: &Path, meta: &Metadata) -> Option<(u64, u64, u64)> {
+    if meta.is_symlink || meta.is_dir || meta.nlink != 1 {
+        return None;
+    }
+    semver(path.file_name()?.to_str()?)
+}
+
+impl FileRule for OldVersions {
+    fn roots(&self, _: &RuleContext) -> Vec<RootedPath> {
+        vec![RootedPath::Under(Root::Home, VERSIONS_REL)]
+    }
+    fn visit(&self, entry: &EntryInfo, depth: usize, _: &RuleContext, fs: &dyn Fs) -> Visit {
+        if depth == 0 {
+            return Visit::Descend;
+        }
+        match is_old(entry, fs) {
+            Some(true) => Visit::Candidate,
+            _ => Visit::Skip,
+        }
+    }
+}
+
+/// `Some(true)` only when the entry is a candidate that is neither the
+/// current version nor the highest; `None` fails closed.
+fn is_old(entry: &EntryInfo, fs: &dyn Fs) -> Option<bool> {
+    let version = version_of(entry.path, entry.meta)?;
+    let root = entry.path.parent()?;
+    // <home>/.local/share/claude/versions/<name>
+    let home = root.ancestors().nth(4)?;
+    let launcher = home.join(LAUNCHER_REL);
+    if !fs.symlink_metadata(&launcher).ok()?.is_symlink {
+        return None;
+    }
+    let current = fs.canonicalize(&launcher).ok()?;
+    let canon_root = fs.canonicalize(root).ok()?;
+    if current.parent() != Some(canon_root.as_path()) {
+        return None;
+    }
+    if fs.canonicalize(entry.path).ok()? == current {
+        return Some(false);
+    }
+    let highest = fs
+        .read_dir(root)
+        .ok()?
+        .iter()
+        .filter_map(|e| version_of(&e.path, &fs.symlink_metadata(&e.path).ok()?))
+        .max()?;
+    Some(version != highest)
+}
 
 /// FR-001, FR-015: Cursor caches and logs. Only named dirs: `User` holds
 /// settings and agent chat (FR-004). Cursor's bundle id is the ToDesktop one.

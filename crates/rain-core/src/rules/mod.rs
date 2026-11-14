@@ -390,6 +390,7 @@ mod tests {
             [
                 "ai.claude-code.cache",
                 "ai.claude-code.logs",
+                "ai.claude-code.old-versions",
                 "ai.cursor.cache",
                 "ai.windsurf.cache",
                 "ai.cursor.workspace-storage",
