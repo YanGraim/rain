@@ -243,6 +243,20 @@ fn non_files_do_not_become_the_highest_version() {
     assert_eq!(h.found(), strs(&["2.1.318", "2.1.319"]));
 }
 
+// Leading zeros give the same numeric version: both spellings of the
+// highest one stay, and neither is ever listed in place of the other.
+#[test]
+fn leading_zero_spelling_of_the_highest_is_kept() {
+    let h = Home::new();
+    h.versions(&["2.1.4", "02.1.5", "2.1.5"]);
+    h.link_bin_to_version("2.1.4");
+    assert!(h.found().is_empty());
+    let h = Home::new();
+    h.versions(&["2.1.4", "02.1.5", "2.1.5"]);
+    h.link_bin_to_version("02.1.5");
+    assert_eq!(h.found(), strs(&["2.1.4"]));
+}
+
 // A single installed version is never listed.
 #[test]
 fn single_version_is_kept() {
