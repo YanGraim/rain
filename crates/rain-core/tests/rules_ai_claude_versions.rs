@@ -1,4 +1,4 @@
-//! AI2d: `ai.claude-code.old-versions` against the real filesystem. Every
+//! `ai.claude-code.old-versions` against the real filesystem. Every
 //! tree is built inside a tempdir under `CARGO_TARGET_TMPDIR`; nothing
 //! outside it is touched.
 
@@ -274,7 +274,7 @@ fn missing_root_is_silent() {
     assert!(h.found().is_empty());
 }
 
-// AI2d: medium, never preselected, no app to close, same category as the
+// Medium, never preselected, no app to close, same category as the
 // other Claude Code rules.
 #[test]
 fn meta_is_medium_not_default() {
