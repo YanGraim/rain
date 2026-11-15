@@ -366,3 +366,28 @@ fn user_data_entry_symlinked_to_protected_is_refused() {
         .all(|u| u.id != "codeium.conversations"));
     assert!(!mentions(&report, &ssh), "{report:?}");
 }
+
+// #159: whatever rule takes a user supplied root, one equal to or inside
+// `~/.claude` is refused with the protection reason and nothing is offered;
+// a neighbour folder still is.
+#[test]
+fn user_root_in_claude_home_is_refused_on_a_real_filesystem() {
+    let h = Home::new();
+    h.dir(".claude/futuro");
+    let neighbour = h.dir("projeto");
+    for rel in [".claude", ".claude/futuro"] {
+        let root = h.path.join(rel);
+        let report = h.scan(vec![RootedPath::User(root.clone())]);
+        assert!(report.items.is_empty(), "{rel}: {:?}", report.items);
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.path == root && s.reason == SkipReason::Protected),
+            "{rel}: {:?}",
+            report.skipped
+        );
+    }
+    let report = h.scan(vec![RootedPath::User(neighbour.clone())]);
+    assert!(report.items.iter().any(|i| i.path.starts_with(&neighbour)));
+}
