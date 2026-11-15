@@ -59,6 +59,9 @@ const BUILTIN: &str = include_str!("protected.list");
 /// Built-in user data, `<id> <path>` per line (FR-004).
 const BUILTIN_USER_DATA: &str = include_str!("userdata.list");
 
+/// Claude Code's folder, relative to the home.
+const CLAUDE_HOME_REL: &str = ".claude";
+
 /// Reported for a path that cannot be compared, so it fails closed.
 const UNCOMPARABLE: &str = "unknown";
 
@@ -121,17 +124,29 @@ pub struct ProtectList {
     identities: BTreeSet<(u64, u64)>,
     /// `(dev, ino)` of every user data entry that exists, with its id.
     user_data_identities: BTreeMap<(u64, u64), &'static str>,
+    /// `~/.claude`, which rule roots may not be: only named folders inside
+    /// it are. A user supplied root equal to or inside it is refused.
+    claude_home: NormalizedPattern,
+    claude_home_identity: Option<(u64, u64)>,
 }
 
 impl ProtectList {
     /// Builds the embedded list, placing `~` entries below the platform home.
     pub fn builtin(platform: &dyn Platform) -> Result<Self, ProtectError> {
         let home = platform.resolve(Root::Home)?;
+        let literal = home.join(CLAUDE_HOME_REL);
+        let normalized = comparable(&literal)
+            .ok_or_else(|| ProtectError::InvalidEntry(CLAUDE_HOME_REL.to_string()))?;
         Ok(Self {
             patterns: parse_list(BUILTIN, &home)?,
             user_data: parse_user_data(BUILTIN_USER_DATA, &home)?,
             identities: BTreeSet::new(),
             user_data_identities: BTreeMap::new(),
+            claude_home: NormalizedPattern {
+                literal,
+                normalized,
+            },
+            claude_home_identity: None,
         })
     }
 
@@ -145,6 +160,7 @@ impl ProtectList {
                 self.identities.insert(identity);
             }
         }
+        self.claude_home_identity = identity_of(fs, &self.claude_home.literal);
         // FR-004: user data is recognised by identity too.
         for (id, pattern) in &self.user_data {
             if let Some(identity) = identity_of(fs, &pattern.literal) {
@@ -173,6 +189,31 @@ impl ProtectList {
         self.patterns
             .iter()
             .any(|p| p.literal.starts_with(canonical) || p.normalized.starts_with(&normalized))
+    }
+
+    /// True if `canonical` is `~/.claude` or lies inside it, by name (case
+    /// and Unicode forms as for protection) or because it or an ancestor has
+    /// the identity of `~/.claude` (a firmlink spelling). Used for user
+    /// supplied roots, which may not be there; named rule roots such as
+    /// `~/.claude/cache` are not asked. Paths that cannot be compared, and
+    /// ancestors that cannot be read, fail closed.
+    pub fn in_claude_home_on(&self, fs: &dyn Fs, canonical: &Path) -> bool {
+        let Some(normalized) = comparable(canonical) else {
+            return true;
+        };
+        let home = &self.claude_home;
+        if canonical.starts_with(&home.literal) || normalized.starts_with(&home.normalized) {
+            return true;
+        }
+        let Some(identity) = self.claude_home_identity else {
+            return false;
+        };
+        canonical
+            .ancestors()
+            .any(|ancestor| match fs.symlink_metadata(ancestor) {
+                Ok(meta) => (meta.dev, meta.ino) == identity,
+                Err(_) => true,
+            })
     }
 
     /// FR-004: the id of the user data entry that `canonical` is, lies inside
@@ -263,6 +304,8 @@ impl ProtectList {
             user_data: Vec::new(),
             identities,
             user_data_identities: BTreeMap::new(),
+            claude_home: self.claude_home.clone(),
+            claude_home_identity: self.claude_home_identity,
         }
     }
 
@@ -280,6 +323,11 @@ impl ProtectList {
                 user_data,
                 identities: BTreeSet::new(),
                 user_data_identities: BTreeMap::new(),
+                claude_home: NormalizedPattern {
+                    literal: Path::new(home).join(CLAUDE_HOME_REL),
+                    normalized: normalize(&Path::new(home).join(CLAUDE_HOME_REL)),
+                },
+                claude_home_identity: None,
             },
             Err(e) => panic!("bad user data text: {e}"),
         }
@@ -1873,6 +1921,31 @@ mod userdata_tests {
         // Relaxed, but only for the entry itself and below.
         assert!(!copy.is_protected(&home.join(".claude/projects/p1")));
         assert!(copy.is_protected(&home.join(".claude/todos")));
+    }
+
+    // #159: a `--path` root equal to or inside ~/.claude is recognised by
+    // name (case and Unicode forms as the protection list) and by identity.
+    #[test]
+    fn claude_home_roots_are_recognised() {
+        let list = list();
+        let fs = crate::fs::FakeFs::new();
+        let home = Path::new(HOME);
+        for rel in [
+            ".claude",
+            ".claude/futuro",
+            ".claude/x/y",
+            ".CLAUDE",
+            ".Claude/Futuro",
+        ] {
+            assert!(list.in_claude_home_on(&fs, &home.join(rel)), "{rel}");
+        }
+        // Another folder with a similar name, the home itself and the
+        // protected neighbours' parents are not "inside ~/.claude".
+        for rel in [".claudex", ".claude.json", "claude", ".config/claude", ""] {
+            assert!(!list.in_claude_home_on(&fs, &home.join(rel)), "{rel}");
+        }
+        // Paths that cannot be compared fail closed.
+        assert!(list.in_claude_home_on(&fs, Path::new("relative")));
     }
 
     #[test]

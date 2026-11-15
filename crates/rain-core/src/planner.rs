@@ -221,6 +221,16 @@ fn discover(
                     continue;
                 }
             };
+            // #159: a root the user supplied may not be `~/.claude` or lie
+            // inside it; named folders there come from rules, not from here.
+            if matches!(rooted, RootedPath::User(_)) && ctx.protect.in_claude_home_on(ctx.fs, &root)
+            {
+                skipped.insert(Skipped {
+                    path: root,
+                    reason: SkipReason::Protected,
+                });
+                continue;
+            }
             let d = walker.discover(&root, &mut |path, meta, depth| {
                 files.visit(
                     &EntryInfo {

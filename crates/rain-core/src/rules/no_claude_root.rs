@@ -4,7 +4,7 @@
 //! folders; they are the explicit exception and must prune `~/.claude`.
 
 use super::{builtin, Rule};
-use crate::fs::{FakeFs, Metadata};
+use crate::fs::{FakeFs, Fs, Metadata};
 use crate::model::{Category, Risk, RuleId, SkipReason};
 use crate::planner::{scan, ResolvedRoots, ScanContext};
 use crate::protect::{normalize, ProtectList};
@@ -351,7 +351,12 @@ fn walkers_fixture() -> FakeFs {
     fs
 }
 
-fn scan_walkers(fs: &FakeFs) -> Vec<PathBuf> {
+/// Items and skips of `rules` with the given `--path` roots.
+fn scan_with(
+    fs: &FakeFs,
+    rules: Vec<&'static dyn Rule>,
+    user_paths: Vec<PathBuf>,
+) -> (Vec<PathBuf>, Vec<(PathBuf, SkipReason)>) {
     let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(fs);
     let roots = ResolvedRoots {
         home: PathBuf::from(HOME),
@@ -364,32 +369,39 @@ fn scan_walkers(fs: &FakeFs) -> Vec<PathBuf> {
         roots: &roots,
         rule_ctx: RuleContext {
             min_age_days: 30,
-            user_paths: Vec::new(),
+            user_paths,
             now: now(),
         },
         tools: &crate::tools::NoTools,
         threads: Some(2),
     };
-    let rules = super::select(HOME_WALKERS).unwrap();
     let report = scan(&rules, &ctx, &AtomicBool::new(false)).unwrap();
-    // Nothing under ~/.claude is read, so it is not even a skip.
-    assert!(
-        report
-            .skipped
-            .iter()
-            .all(|s| s.reason != SkipReason::UserData
-                && !s.path.starts_with(Path::new(HOME).join(".claude"))),
-        "{:?}",
-        report.skipped
-    );
-    report.items.iter().map(|i| i.path.clone()).collect()
+    let items = report.items.iter().map(|i| i.path.clone()).collect();
+    let skipped = report
+        .skipped
+        .iter()
+        .map(|s| (s.path.clone(), s.reason))
+        .collect();
+    (items, skipped)
 }
 
 // #118: artifact folders of projects below ~/.claude are never offered, a
 // project next to it still is.
 #[test]
 fn home_walkers_do_not_enter_claude() {
-    let got = scan_walkers(&walkers_fixture());
+    let (got, skipped) = scan_with(
+        &walkers_fixture(),
+        super::select(HOME_WALKERS).unwrap(),
+        Vec::new(),
+    );
+    // Nothing under ~/.claude is read, so it is not even a skip.
+    assert!(
+        skipped
+            .iter()
+            .all(|(p, r)| *r != SkipReason::UserData
+                && !p.starts_with(Path::new(HOME).join(".claude"))),
+        "{skipped:?}"
+    );
     let home = Path::new(HOME);
     assert_eq!(
         got,
@@ -398,4 +410,152 @@ fn home_walkers_do_not_enter_claude() {
             home.join("rustproj/target")
         ]
     );
+}
+
+// --- #159: a user supplied root in ~/.claude is refused ----------------
+
+fn home_path(rel: &str) -> PathBuf {
+    Path::new(HOME).join(rel)
+}
+
+fn walkers() -> Vec<&'static dyn Rule> {
+    super::select(HOME_WALKERS).unwrap()
+}
+
+// `--path ~/.claude` and a folder inside it: nothing is offered and each
+// root is a skip with the existing protection reason.
+#[test]
+fn user_root_equal_or_inside_claude_is_refused() {
+    for rel in [".claude", ".claude/futuro", ".claude/x", ".claude/x/target"] {
+        let root = home_path(rel);
+        let (items, skipped) = scan_with(&walkers_fixture(), walkers(), vec![root.clone()]);
+        assert!(items.is_empty(), "{rel}: {items:?}");
+        assert!(
+            skipped.contains(&(root, SkipReason::Protected)),
+            "{rel}: {skipped:?}"
+        );
+    }
+}
+
+// Several roots: only the ones in ~/.claude are refused.
+#[test]
+fn only_the_roots_in_claude_are_refused() {
+    let roots = vec![home_path(".claude/futuro"), home_path("projeto")];
+    let (items, skipped) = scan_with(&walkers_fixture(), walkers(), roots);
+    assert_eq!(items, vec![home_path("projeto/node_modules")]);
+    assert!(skipped.contains(&(home_path(".claude/futuro"), SkipReason::Protected)));
+}
+
+// A neighbour `--path` stays normal, as do look-alike folder names.
+#[test]
+fn user_root_next_to_claude_is_not_refused() {
+    let mut fs = walkers_fixture();
+    fs.insert(home_path(".claudex"), entry(true, 200, 90))
+        .insert(home_path(".claudex/p"), entry(true, 201, 90))
+        .insert(home_path(".claudex/p/package.json"), entry(false, 202, 90))
+        .insert(home_path(".claudex/p/node_modules"), entry(true, 203, 90))
+        .insert(
+            home_path(".claudex/p/node_modules/a.js"),
+            entry(false, 204, 90),
+        );
+    let (items, _) = scan_with(&fs, walkers(), vec![home_path("projeto")]);
+    assert_eq!(items, vec![home_path("projeto/node_modules")]);
+    // `~/.claudex` is not `~/.claude`: it is a normal root, so its project
+    // is offered.
+    let (items, skipped) = scan_with(&fs, walkers(), vec![home_path(".claudex")]);
+    assert!(
+        !skipped.contains(&(home_path(".claudex"), SkipReason::Protected)),
+        "{skipped:?}"
+    );
+    assert_eq!(items, vec![home_path(".claudex/p/node_modules")]);
+}
+
+// Another case spelling of ~/.claude is the same folder on APFS.
+#[test]
+fn user_root_in_other_case_spelling_is_refused() {
+    for rel in [".CLAUDE", ".Claude/futuro", ".cLaUdE"] {
+        let root = home_path(rel);
+        let (items, skipped) = scan_with(&walkers_fixture(), walkers(), vec![root.clone()]);
+        assert!(items.is_empty(), "{rel}: {items:?}");
+        assert!(
+            skipped.contains(&(root, SkipReason::Protected)),
+            "{rel}: {skipped:?}"
+        );
+    }
+}
+
+/// Inserts `alias` as another name (same dev+ino) for `~/.claude`, with a
+/// project below it, and the folders above it.
+fn with_claude_alias(fs: &mut FakeFs, alias: &str, parents: &[&str]) {
+    let claude_ino = fs.symlink_metadata(&home_path(".claude")).unwrap().ino;
+    for (n, parent) in parents.iter().enumerate() {
+        fs.insert(*parent, entry(true, 300 + n as u64, 900));
+    }
+    fs.insert(alias, entry(true, claude_ino, 90))
+        .insert(format!("{alias}/futuro"), entry(true, 320, 90))
+        .insert(
+            format!("{alias}/futuro/package.json"),
+            entry(false, 321, 90),
+        )
+        .insert(format!("{alias}/futuro/node_modules"), entry(true, 322, 90))
+        .insert(
+            format!("{alias}/futuro/node_modules/a.js"),
+            entry(false, 323, 90),
+        );
+}
+
+// Another path with the dev+ino of ~/.claude, in a place no list names:
+// only the identity gives it away.
+#[test]
+fn user_root_through_an_identity_alias_of_claude_is_refused() {
+    let mut fs = walkers_fixture();
+    let alias = "/mnt/mirror/claude-copy";
+    with_claude_alias(&mut fs, alias, &["/mnt", "/mnt/mirror"]);
+    for root in [alias.to_string(), format!("{alias}/futuro")] {
+        let (items, skipped) = scan_with(&fs, walkers(), vec![PathBuf::from(&root)]);
+        assert!(items.is_empty(), "{root}: {items:?}");
+        assert!(
+            skipped.contains(&(PathBuf::from(&root), SkipReason::Protected)),
+            "{root}: {skipped:?}"
+        );
+    }
+}
+
+// The macOS firmlink spelling of the home is refused too.
+#[test]
+fn user_root_through_the_firmlink_spelling_is_refused() {
+    let mut fs = walkers_fixture();
+    let alias = "/System/Volumes/Data/Users/Tester/.claude";
+    with_claude_alias(
+        &mut fs,
+        alias,
+        &[
+            "/System",
+            "/System/Volumes",
+            "/System/Volumes/Data",
+            "/System/Volumes/Data/Users",
+            "/System/Volumes/Data/Users/Tester",
+        ],
+    );
+    let (items, skipped) = scan_with(&fs, walkers(), vec![PathBuf::from(alias)]);
+    assert!(items.is_empty(), "{items:?}");
+    assert!(skipped.contains(&(PathBuf::from(alias), SkipReason::Protected)));
+}
+
+// The guard for user roots, over the whole registry: whichever rule takes
+// the `--path` roots, nothing below ~/.claude is offered for them. The
+// fixture has no folder that a rule names on its own below ~/.claude.
+#[test]
+fn no_builtin_rule_offers_anything_for_user_roots_in_claude() {
+    let fs = walkers_fixture();
+    let all: Vec<&'static dyn Rule> = builtin()
+        .iter()
+        .copied()
+        .filter(|r| matches!(r.kind(), RuleKind::Files(_)))
+        .collect();
+    let claude = home_path(".claude");
+    let roots = vec![claude.clone(), claude.join("futuro"), claude.join("x")];
+    let (items, _) = scan_with(&fs, all, roots);
+    let inside: Vec<&PathBuf> = items.iter().filter(|p| p.starts_with(&claude)).collect();
+    assert!(inside.is_empty(), "{inside:?}");
 }
