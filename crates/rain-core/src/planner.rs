@@ -207,14 +207,20 @@ fn accept(
     found
         .into_iter()
         .filter(|(path, _)| {
-            let refused = protect.contains_protected(path);
-            if refused {
+            let reason = if protect.contains_protected(path) {
+                Some(SkipReason::Protected)
+            } else if protect.user_data_id(path).is_some() {
+                Some(SkipReason::UserData)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
                 skipped.insert(Skipped {
                     path: path.clone(),
-                    reason: SkipReason::Protected,
+                    reason,
                 });
             }
-            !refused
+            reason.is_none()
         })
         .collect()
 }
@@ -421,6 +427,10 @@ fn checked_path(
     if ctx.protect.is_protected_on(ctx.fs, &canonical) || ctx.protect.contains_protected(&canonical)
     {
         skipped.insert(refuse(canonical, SkipReason::Protected));
+        return None;
+    }
+    if ctx.protect.user_data_id(&canonical).is_some() {
+        skipped.insert(refuse(canonical, SkipReason::UserData));
         return None;
     }
     if !roots
@@ -653,10 +663,35 @@ mod tests {
             Ok(list) => list.with_identities(fs),
             Err(e) => panic!("builtin failed: {e}"),
         };
+        run_inner(fs, rules, cancel, threads, tools, &protect)
+    }
+
+    fn run_protect(fs: &dyn Fs, rules: &[&dyn Rule], protect: &ProtectList) -> ScanReport {
+        match run_inner(
+            fs,
+            rules,
+            &AtomicBool::new(false),
+            None,
+            &crate::tools::NoTools,
+            protect,
+        ) {
+            Ok(report) => report,
+            Err(e) => panic!("scan failed: {e}"),
+        }
+    }
+
+    fn run_inner(
+        fs: &dyn Fs,
+        rules: &[&dyn Rule],
+        cancel: &AtomicBool,
+        threads: Option<usize>,
+        tools: &dyn ToolRunner,
+        protect: &ProtectList,
+    ) -> Result<ScanReport, ScanError> {
         let roots = roots();
         let ctx = ScanContext {
             fs,
-            protect: &protect,
+            protect,
             roots: &roots,
             rule_ctx: RuleContext {
                 min_age_days: 0,
@@ -792,6 +827,145 @@ mod tests {
             totals(&report),
             vec![("test.home", 2 * 512, 1), ("test.ssh", 0, 0)]
         );
+    }
+
+    /// Home with the given entries (folders get a child file) and a
+    /// `test.home` rule that offers every direct child of the home.
+    fn user_data_scan(dirs: &[&str], files: &[&str], deep: bool) -> ScanReport {
+        let mut fs = base();
+        let mut ino = 300;
+        for d in dirs {
+            let mut cur = HOME.to_string();
+            for part in d.split('/') {
+                cur = format!("{cur}/{part}");
+                ino += 1;
+                fs.insert(cur.clone(), dir(ino));
+            }
+            ino += 1;
+            fs.insert(format!("{cur}/x"), file(ino, 8));
+        }
+        for f in files {
+            ino += 1;
+            fs.insert(format!("{HOME}/{f}"), file(ino, 8));
+        }
+        let mut r = rule("test.home", under(Root::Home, ""));
+        if deep {
+            r.pick = Pick::Grandchildren;
+        }
+        run(&fs, &[&r])
+    }
+
+    fn home_path(rel: &str) -> PathBuf {
+        Path::new(HOME).join(rel)
+    }
+
+    fn skipped_as_user_data(report: &ScanReport, rel: &str) -> bool {
+        report
+            .skipped
+            .iter()
+            .any(|s| s.path == home_path(rel) && s.reason == SkipReason::UserData)
+    }
+
+    fn has_item(report: &ScanReport, rel: &str) -> bool {
+        report.items.iter().any(|i| i.path == home_path(rel))
+    }
+
+    // FR-004: `.codex` holds user data and a protected file, so either
+    // reason is fine (spec 4); it is never an item. The pure user data case
+    // is `candidate_holding_only_user_data_is_skipped`.
+    #[test]
+    fn candidate_containing_user_data_is_skipped() {
+        let report = user_data_scan(&[".codex/sessions"], &[], false);
+        assert!(
+            report.skipped.iter().any(|s| s.path == home_path(".codex")
+                && matches!(s.reason, SkipReason::UserData | SkipReason::Protected)),
+            "{:?}",
+            report.skipped
+        );
+        assert!(!has_item(&report, ".codex"));
+        assert_eq!(report.total_bytes, 0);
+    }
+
+    // FR-004: a folder that holds user data and nothing protected is
+    // refused with the user data reason. Uses a list with only that entry.
+    #[test]
+    fn candidate_holding_only_user_data_is_skipped() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/box", dir(320))
+            .insert("/Users/Tester/box/.aider.chat.history.md", file(321, 8))
+            .insert("/Users/Tester/other", dir(322))
+            .insert("/Users/Tester/other/a", file(323, 8));
+        let protect =
+            ProtectList::only_user_data("aider.chat-history ~/box/.aider.chat.history.md", HOME);
+        let r = rule("test.home", under(Root::Home, ""));
+        let report = run_protect(&fs, &[&r], &protect);
+        assert!(skipped_as_user_data(&report, "box"), "{:?}", report.skipped);
+        assert!(!has_item(&report, "box"));
+        assert!(has_item(&report, "other"));
+    }
+
+    // FR-004: a candidate inside user data is refused.
+    #[test]
+    fn candidate_inside_user_data_is_skipped() {
+        let report = user_data_scan(&[".codeium"], &[], true);
+        assert!(skipped_as_user_data(&report, ".codeium/x"));
+        assert!(!has_item(&report, ".codeium/x"));
+    }
+
+    // FR-004: a candidate equal to a user data entry is refused.
+    #[test]
+    fn candidate_equal_to_user_data_is_skipped() {
+        let report = user_data_scan(&[], &[".aider.chat.history.md"], false);
+        assert!(skipped_as_user_data(&report, ".aider.chat.history.md"));
+        assert!(!has_item(&report, ".aider.chat.history.md"));
+        assert_eq!(report.total_bytes, 0);
+    }
+
+    // FR-004: case and Unicode spellings of an entry are still user data.
+    #[test]
+    fn user_data_spelling_variants_are_skipped() {
+        for name in [".AIDER.chat.HISTORY.md", ".Aider.Chat.History.MD"] {
+            let report = user_data_scan(&[], &[name], false);
+            assert!(skipped_as_user_data(&report, name), "{name}");
+            assert!(report.items.is_empty(), "{name}");
+        }
+        let report = user_data_scan(&[".CODEIUM"], &[], true);
+        assert!(skipped_as_user_data(&report, ".CODEIUM/x"));
+    }
+
+    // FR-004: neighbours are compared by whole components and stay normal.
+    #[test]
+    fn neighbours_of_user_data_stay_candidates() {
+        let report = user_data_scan(
+            &[".codexx", ".codeium-other"],
+            &[".aider.chat.history.mdx"],
+            false,
+        );
+        for rel in [".codexx", ".codeium-other", ".aider.chat.history.mdx"] {
+            assert!(has_item(&report, rel), "{rel}");
+        }
+        assert!(report
+            .skipped
+            .iter()
+            .all(|s| s.reason != SkipReason::UserData));
+    }
+
+    // FR-004: a user supplied root that is user data is refused, not scanned.
+    #[test]
+    fn user_data_root_is_refused() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.codex", dir(310))
+            .insert("/Users/Tester/.codex/sessions", dir(311))
+            .insert("/Users/Tester/.codex/sessions/a", file(312, 8));
+        let r = rule(
+            "test.codex",
+            vec![RootedPath::User(PathBuf::from(
+                "/Users/Tester/.codex/sessions",
+            ))],
+        );
+        let report = run(&fs, &[&r]);
+        assert!(report.items.is_empty());
+        assert_eq!(reasons(&report), vec![SkipReason::UserData]);
     }
 
     // ADR 0005: the innermost item keeps its bytes; the outer item of another

@@ -298,6 +298,7 @@ fn reason_str(r: SkipReason) -> String {
     let fixed = match r {
         SkipReason::PermissionDenied => "permission-denied",
         SkipReason::Protected => "protected",
+        SkipReason::UserData => "user-data",
         SkipReason::Symlink => "symlink",
         SkipReason::OtherVolume => "other-volume",
         SkipReason::NotFound => "not-found",
@@ -601,6 +602,21 @@ mod tests {
                 "io:other",
             ]
         );
+    }
+
+    // FR-004: user data skips have their own stable JSON reason.
+    #[test]
+    fn user_data_reason_is_user_data() {
+        assert_eq!(reason_str(SkipReason::UserData), "user-data");
+        // The JSON keeps its shape: same fields, only the value is new.
+        let v = json(&report(vec![skipped(
+            "/Users/u/.codeium",
+            SkipReason::UserData,
+        )]));
+        let entry = &v["skipped"][0];
+        assert_eq!(entry["reason"], "user-data");
+        assert_eq!(entry["path"], "/Users/u/.codeium");
+        assert_eq!(entry.as_object().unwrap().len(), 2);
     }
 
     // FR-013: the skipped line uses the singular form for one item.
