@@ -53,6 +53,9 @@
 ~/Library/Caches/docker-secrets-engine
 # Poetry project virtualenvs live under Caches but are environments, not cache.
 ~/Library/Caches/pypoetry/virtualenvs
+# Downloads in flight (URLSession background transfers) are kept by the
+# system until they finish; removing them breaks the transfer.
+~/Library/Caches/com.apple.nsurlsessiond
 
 # Container engines: VM disks and data, cleaned only by the engine itself.
 # Docker's group container is already covered by ~/Library/Group Containers.
