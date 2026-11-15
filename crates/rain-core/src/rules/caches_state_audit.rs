@@ -30,6 +30,10 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
     // Environments, not cache: the child is refused whole because it holds
     // a protected folder.
     ("pypoetry", "pypoetry/virtualenvs/proj/bin"),
+    // hatch and pdm environments can be pointed at Caches by their config;
+    // the child is refused whole, with or without an environment (see below).
+    ("hatch", "hatch/env/proj/bin"),
+    ("pdm", "pdm/venvs/proj/bin"),
     // Downloads in flight, kept by the system until they finish.
     (
         "com.apple.nsurlsessiond",
@@ -215,6 +219,72 @@ fn ordinary_neighbours_stay_candidates() {
         generic,
         vec![child("com.example.app"), child("com.example.other")]
     );
+}
+
+// #117 (decision B): `hatch` and `pdm` are refused whole whether or not an
+// environment exists in them, because protection of what a candidate holds
+// is by path, not by existence (as for `pypoetry`). Their real cache is not
+// offered either; that is intentional and cheap: neither tool keeps its
+// environments there by default, and an environment pointed at Caches would
+// lose the user's data.
+#[test]
+fn hatch_and_pdm_are_refused_with_or_without_an_environment() {
+    for (name, env_dir) in [("hatch", "env"), ("pdm", "venvs")] {
+        let mut ino = 9000;
+
+        // With an environment: refused whole, the cache beside it too.
+        let mut fs = fixture(&["com.example.app"]);
+        put(&mut fs, &format!("{name}/wheels/a"), &mut ino);
+        put(&mut fs, &format!("{name}/{env_dir}/proj/bin"), &mut ino);
+        let report = run(&fs);
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|i| !i.path.starts_with(child(name))),
+            "{name} with env was offered: {:?}",
+            report.items
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.path == child(name) && s.reason == SkipReason::Protected),
+            "{name} with env: {:?}",
+            report.skipped
+        );
+
+        // Without an environment: the same, by path.
+        let mut fs = FakeFs::new();
+        fs.insert("/Users", md(true, 1))
+            .insert(HOME, md(true, 2))
+            .insert("/Users/Tester/Library", md(true, 3))
+            .insert(CACHES, md(true, 4));
+        put(&mut fs, &format!("{name}/wheels/a"), &mut ino);
+        put(&mut fs, "com.example.app/blob", &mut ino);
+        let report = run(&fs);
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|i| !i.path.starts_with(child(name))),
+            "{name} without env was offered: {:?}",
+            report.items
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.path == child(name) && s.reason == SkipReason::Protected),
+            "{name} without env: {:?}",
+            report.skipped
+        );
+        // An ordinary neighbour is still a normal candidate.
+        assert!(report
+            .items
+            .iter()
+            .any(|i| i.path == child("com.example.app") && i.rule.as_str() == "sys.user-caches"));
+    }
 }
 
 // The audit table and the lists say the same: every `~/Library/Caches/<x>`

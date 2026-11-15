@@ -53,6 +53,12 @@
 ~/Library/Caches/docker-secrets-engine
 # Poetry project virtualenvs live under Caches but are environments, not cache.
 ~/Library/Caches/pypoetry/virtualenvs
+# hatch and pdm keep their environments outside Caches by default, but their
+# config can point them here. An environment is the user's work, not cache,
+# so these are protected, and a candidate that holds them (`hatch`, `pdm`) is
+# refused whole.
+~/Library/Caches/hatch/env
+~/Library/Caches/pdm/venvs
 # Downloads in flight (URLSession background transfers) are kept by the
 # system until they finish; removing them breaks the transfer.
 ~/Library/Caches/com.apple.nsurlsessiond
