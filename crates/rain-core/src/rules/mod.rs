@@ -10,6 +10,8 @@ mod containers;
 mod extensions;
 mod macos;
 mod models;
+#[cfg(test)]
+mod no_claude_root;
 mod node_modules;
 mod pkg;
 mod proj;
