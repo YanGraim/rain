@@ -249,3 +249,120 @@ fn folder_holding_an_alias_of_user_data_is_refused() {
         report.skipped
     );
 }
+
+// FR-004 (U2): on a real filesystem the user data that exists is measured
+// and informed, even where the built-in protection list also names it
+// (`~/.claude/projects`); the protected credentials next to it are not.
+#[test]
+fn existing_user_data_is_reported_as_unmanaged() {
+    let h = Home::new();
+    h.dir(".claude/projects/p1");
+    h.dir(".codex/sessions");
+    h.file(".codex/auth.json");
+    h.file(".aider.chat.history.md");
+    let report = h.scan(Vec::new());
+    let got: Vec<(&str, PathBuf, u64)> = report
+        .unmanaged
+        .iter()
+        .map(|u| (u.id, u.path.clone(), u.file_count))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "aider.chat-history",
+                h.path.join(".aider.chat.history.md"),
+                1
+            ),
+            ("claude-code.history", h.path.join(".claude/projects"), 1),
+            ("codex.sessions", h.path.join(".codex/sessions"), 1),
+        ]
+    );
+    assert!(report.unmanaged.iter().all(|u| u.allocated_bytes > 0));
+    assert!(report.items.is_empty());
+    assert_eq!(report.total_bytes, 0);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
+
+fn mentions(report: &ScanReport, under: &Path) -> bool {
+    report.items.iter().any(|i| i.path.starts_with(under))
+        || report.unmanaged.iter().any(|u| u.path.starts_with(under))
+        || report.skipped.iter().any(|s| s.path.starts_with(under))
+}
+
+// FR-004 (U2): a hard link to a protected file inside a user data entry is
+// refused while measuring and its bytes are not counted.
+#[test]
+fn protected_hard_link_inside_user_data_is_not_measured() {
+    let h = Home::new();
+    h.dir(".claude/projects/p1");
+    let secret = h.file(".claude/.credentials.json");
+    let link = h.path.join(".claude/projects/p1/creds-link");
+    fs::hard_link(&secret, &link).unwrap();
+    let report = h.scan(Vec::new());
+    let entry = report
+        .unmanaged
+        .iter()
+        .find(|u| u.id == "claude-code.history")
+        .unwrap();
+    assert_eq!(entry.file_count, 1, "{entry:?}");
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.path == link && s.reason == SkipReason::Protected),
+        "{:?}",
+        report.skipped
+    );
+}
+
+// FR-004 (U2): a symlink inside an entry that points to a protected folder
+// is not followed; nothing under the protected folder shows up.
+#[test]
+fn symlink_to_protected_inside_user_data_is_not_followed() {
+    let h = Home::new();
+    let ssh = h.dir(".ssh");
+    h.dir(".codex/sessions");
+    let link = h.path.join(".codex/sessions/shortcut");
+    symlink(&ssh, &link).unwrap();
+    let report = h.scan(Vec::new());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.path == link && s.reason == SkipReason::Symlink),
+        "{:?}",
+        report.skipped
+    );
+    assert!(!mentions(&report, &ssh), "{report:?}");
+    let entry = report
+        .unmanaged
+        .iter()
+        .find(|u| u.id == "codex.sessions")
+        .unwrap();
+    assert_eq!(entry.file_count, 1, "{entry:?}");
+}
+
+// FR-004 (U2): an entry that is itself a symlink to a protected folder is
+// refused: not reported as unmanaged, and nothing under the target shows up.
+#[test]
+fn user_data_entry_symlinked_to_protected_is_refused() {
+    let h = Home::new();
+    let ssh = h.dir(".ssh");
+    let entry = h.path.join(".codeium");
+    symlink(&ssh, &entry).unwrap();
+    let report = h.scan(Vec::new());
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.path == entry && s.reason == SkipReason::Symlink),
+        "{:?}",
+        report.skipped
+    );
+    assert!(report
+        .unmanaged
+        .iter()
+        .all(|u| u.id != "codeium.conversations"));
+    assert!(!mentions(&report, &ssh), "{report:?}");
+}

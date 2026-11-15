@@ -370,6 +370,20 @@ mod tests {
         assert!(matches!(demoted.kind(), RuleKind::Files(_)));
     }
 
+    // FR-004: user data is not a rule, so no `--rule` value can select it.
+    #[test]
+    fn unmanaged_not_selectable_by_rule_flag() {
+        for id in crate::messages::USERDATA_IDS {
+            for name in [id.to_string(), format!("userdata.{id}")] {
+                assert!(select(&[name.as_str()]).is_err(), "{name}");
+                assert!(
+                    builtin().iter().all(|r| r.meta().id.as_str() != name),
+                    "{name}"
+                );
+            }
+        }
+    }
+
     // FR-014
     #[test]
     #[cfg(debug_assertions)]

@@ -228,6 +228,44 @@ impl ProtectList {
             })
     }
 
+    /// FR-004: every user data entry as `(id, path)`, for measuring.
+    pub fn user_data_entries(&self) -> impl Iterator<Item = (&'static str, &Path)> + '_ {
+        self.user_data
+            .iter()
+            .map(|(id, p)| (*id, p.literal.as_path()))
+    }
+
+    /// FR-004: a copy for measuring user data, read only. The entries
+    /// themselves (which may also be protected, like `~/.claude/projects`)
+    /// can be opened and walked; everything else stays protected, and no
+    /// user data skip applies to the walk. Identities are read again so the
+    /// kept protected paths are still recognised under another name.
+    pub fn for_measuring_user_data(&self, fs: &dyn Fs) -> Self {
+        let inside_entry = |p: &NormalizedPattern| {
+            self.user_data.iter().any(|(_, e)| {
+                p.literal.starts_with(&e.literal) || p.normalized.starts_with(&e.normalized)
+            })
+        };
+        let patterns: Vec<NormalizedPattern> = self
+            .patterns
+            .iter()
+            .filter(|p| !inside_entry(p))
+            .cloned()
+            .collect();
+        let mut identities = BTreeSet::new();
+        for pattern in &patterns {
+            if let Some(identity) = identity_of(fs, &pattern.literal) {
+                identities.insert(identity);
+            }
+        }
+        Self {
+            patterns,
+            user_data: Vec::new(),
+            identities,
+            user_data_identities: BTreeMap::new(),
+        }
+    }
+
     /// Ids present in the user data list, one per entry.
     pub fn user_data_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.user_data.iter().map(|(id, _)| *id)
@@ -1800,6 +1838,41 @@ mod userdata_tests {
         let mut known: Vec<&str> = USERDATA_IDS.to_vec();
         known.sort_unstable();
         assert_eq!(in_list, known);
+    }
+
+    // The measuring copy relaxes exactly the protected paths that lie
+    // inside a user data entry and nothing else.
+    #[test]
+    fn measuring_copy_relaxes_only_what_lies_inside_an_entry() {
+        let full = list();
+        let copy = full.for_measuring_user_data(&crate::fs::FakeFs::new());
+        let literals = |l: &ProtectList| -> BTreeSet<PathBuf> {
+            l.patterns.iter().map(|p| p.literal.clone()).collect()
+        };
+        let removed: BTreeSet<PathBuf> = literals(&full)
+            .difference(&literals(&copy))
+            .cloned()
+            .collect();
+        let home = Path::new(HOME);
+        let expected: BTreeSet<PathBuf> = [".claude/projects", ".claude/history.jsonl"]
+            .iter()
+            .map(|rel| home.join(rel))
+            .collect();
+        assert_eq!(removed, expected);
+        for rel in [
+            ".claude/.credentials.json",
+            ".claude/settings.json",
+            ".codex/auth.json",
+            ".ssh",
+            ".gnupg",
+        ] {
+            assert!(copy.is_protected(&home.join(rel)), "{rel}");
+        }
+        // The copy carries no user data rule of its own.
+        assert_eq!(copy.user_data_id(&home.join(".codeium")), None);
+        // Relaxed, but only for the entry itself and below.
+        assert!(!copy.is_protected(&home.join(".claude/projects/p1")));
+        assert!(copy.is_protected(&home.join(".claude/todos")));
     }
 
     #[test]

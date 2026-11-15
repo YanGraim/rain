@@ -67,6 +67,7 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
         out.push_str(&line);
         out.push('\n');
     }
+    push_unmanaged(&mut out, report, catalog);
     let skipped = u64::try_from(report.skipped.len()).unwrap_or(u64::MAX);
     if skipped > 0 {
         let line = catalog
@@ -76,6 +77,38 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
         out.push('\n');
     }
     out
+}
+
+/// FR-004: the user data section: label, path and size, never selectable and
+/// never part of the total above.
+fn push_unmanaged(out: &mut String, report: &ScanReport, catalog: &Catalog) {
+    if report.unmanaged.is_empty() {
+        return;
+    }
+    out.push('\n');
+    out.push_str(catalog.get(MessageKey::ReportUnmanaged));
+    out.push('\n');
+    out.push_str(catalog.get(MessageKey::ReportUnmanagedNote));
+    out.push('\n');
+    let rows: Vec<[String; 3]> = report
+        .unmanaged
+        .iter()
+        .map(|u| {
+            let label = catalog
+                .text(&format!("userdata.{}", u.id))
+                .unwrap_or(u.id)
+                .to_owned();
+            [
+                label,
+                escape_for_terminal(&u.path.to_string_lossy()),
+                format_decimal(u.allocated_bytes),
+            ]
+        })
+        .collect();
+    let widths = column_widths(&rows);
+    for row in &rows {
+        push_row(out, row, &widths);
+    }
 }
 
 /// FR-022: one line per distinct (tool, reason); several rules share a tool.
@@ -254,12 +287,26 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
             })
         })
         .collect();
+    // FR-004: additive, no item id; `key` names the user data entry.
+    let unmanaged: Vec<Value> = report
+        .unmanaged
+        .iter()
+        .map(|u| {
+            json!({
+                "key": u.id,
+                "path": u.path.to_string_lossy(),
+                "allocated_bytes": u.allocated_bytes,
+                "file_count": u.file_count,
+            })
+        })
+        .collect();
     let doc = json!({
         "schema_version": report.schema_version,
         "rules": rules,
         "items": items,
         "skipped": skipped,
         "total_bytes": report.total_bytes,
+        "unmanaged": unmanaged,
     });
     let mut out = serde_json::to_string_pretty(&doc)?;
     out.push('\n');
@@ -340,7 +387,8 @@ mod tests {
     use super::*;
     use rain_core::messages::Locale;
     use rain_core::model::{
-        Category, ItemId, Risk, RuleId, RuleTotal, ScanItem, SkipReason, Skipped, SCHEMA_VERSION,
+        Category, ItemId, Risk, RuleId, RuleTotal, ScanItem, SkipReason, Skipped, Unmanaged,
+        SCHEMA_VERSION,
     };
     use std::io::ErrorKind;
     use std::path::PathBuf;
@@ -395,6 +443,7 @@ mod tests {
             tool_items: Vec::new(),
             providers: Vec::new(),
             tool_total_bytes: 0,
+            unmanaged: Vec::new(),
         }
     }
 
@@ -617,6 +666,82 @@ mod tests {
         assert_eq!(entry["reason"], "user-data");
         assert_eq!(entry["path"], "/Users/u/.codeium");
         assert_eq!(entry.as_object().unwrap().len(), 2);
+    }
+
+    fn with_unmanaged() -> ScanReport {
+        let mut r = report(Vec::new());
+        r.unmanaged = vec![
+            Unmanaged {
+                id: "claude-code.history",
+                path: PathBuf::from("/Users/u/.claude/projects"),
+                allocated_bytes: 2_500_000_000,
+                file_count: 7,
+            },
+            Unmanaged {
+                id: "codex.sessions",
+                path: PathBuf::from("/Users/u/.codex/sessions"),
+                allocated_bytes: 4_096,
+                file_count: 1,
+            },
+        ];
+        r
+    }
+
+    // FR-004: the table shows the user data apart, with its note, in every
+    // language; the total row is the cleanable total and is unchanged.
+    #[test]
+    fn table_shows_unmanaged_in_all_locales() {
+        for locale in [Locale::En, Locale::Es, Locale::PtBr] {
+            let catalog = Catalog::for_locale(locale).unwrap();
+            let out = render_table(&with_unmanaged(), &catalog);
+            for key in [
+                "report.unmanaged",
+                "report.unmanaged-note",
+                "userdata.claude-code.history",
+                "userdata.codex.sessions",
+            ] {
+                let text = catalog.text(key).unwrap();
+                assert!(
+                    out.contains(text),
+                    "{}: {key} missing in\n{out}",
+                    locale.tag()
+                );
+            }
+            assert!(out.contains("/Users/u/.claude/projects"), "{out}");
+            // The cleanable total is the one of the items only.
+            let total = catalog.get(MessageKey::TableTotal);
+            let line = out.lines().find(|l| l.starts_with(total)).unwrap();
+            assert!(line.contains(&format_decimal(1_200_004_096)), "{line}");
+        }
+    }
+
+    // FR-004: without user data the table has no such section.
+    #[test]
+    fn table_without_unmanaged_has_no_section() {
+        let out = render_table(&report(Vec::new()), &en());
+        assert!(!out.contains(en().get(MessageKey::ReportUnmanaged)));
+    }
+
+    // FR-004, FR-010: JSON gets an additive top level `unmanaged` list with
+    // raw bytes, and nothing there can be taken for an item id.
+    #[test]
+    fn json_has_unmanaged_without_item_id() {
+        let v = json(&with_unmanaged());
+        let list = v["unmanaged"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["key"], "claude-code.history");
+        assert_eq!(list[0]["path"], "/Users/u/.claude/projects");
+        assert_eq!(list[0]["allocated_bytes"], 2_500_000_000u64);
+        assert_eq!(list[0]["file_count"], 7);
+        assert!(list[0].get("id").is_none());
+        assert_eq!(list[0].as_object().unwrap().len(), 4);
+        // Existing fields and version are untouched.
+        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["total_bytes"], 1_200_004_096u64);
+        assert_eq!(
+            json(&report(Vec::new()))["unmanaged"],
+            serde_json::json!([])
+        );
     }
 
     // FR-013: the skipped line uses the singular form for one item.

@@ -165,6 +165,17 @@ pub struct RuleTotal {
     pub items: u64,
 }
 
+/// FR-004: user data that exists, measured and only informed. It has no
+/// item id, so there is nothing to select, and its bytes are in no total.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Unmanaged {
+    /// One of `messages::USERDATA_IDS`; its label is `userdata.<id>`.
+    pub id: &'static str,
+    pub path: PathBuf,
+    pub allocated_bytes: u64,
+    pub file_count: u64,
+}
+
 /// Result of a complete scan. Only ever built for a scan that finished.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanReport {
@@ -183,4 +194,7 @@ pub struct ScanReport {
     pub providers: Vec<ProviderStatus>,
     /// Sum of `reported_bytes` of all tool items.
     pub tool_total_bytes: u64,
+    /// FR-004: user data that exists, sorted by `(id, path)`. Not part of
+    /// any total and never selectable.
+    pub unmanaged: Vec<Unmanaged>,
 }

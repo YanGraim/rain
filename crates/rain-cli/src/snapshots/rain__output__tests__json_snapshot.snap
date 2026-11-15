@@ -70,5 +70,6 @@ expression: render_json(&full_report()).unwrap()
       "reason": "io:other"
     }
   ],
-  "total_bytes": 1200004096
+  "total_bytes": 1200004096,
+  "unmanaged": []
 }
