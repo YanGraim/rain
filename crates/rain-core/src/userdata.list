@@ -1,0 +1,10 @@
+# Built-in user data list (FR-004). One `<id> <path>` per line, `~/` is
+# below the canonical home. The id is one of `messages::USERDATA_IDS`. A
+# candidate that is, lies inside or contains an entry is never offered.
+# Matching is the same as the protection list (case and Unicode form).
+
+claude-code.history ~/.claude/projects
+claude-code.history ~/.claude/history.jsonl
+codex.sessions ~/.codex/sessions
+codeium.conversations ~/.codeium
+aider.chat-history ~/.aider.chat.history.md

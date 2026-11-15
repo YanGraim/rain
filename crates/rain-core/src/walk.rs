@@ -25,6 +25,8 @@ pub enum SkipReason {
     /// `EACCES`/`EPERM`, including what macOS denies without Full Disk Access.
     PermissionDenied,
     Protected,
+    /// FR-004: user data (sessions, history); never a candidate.
+    UserData,
     Symlink,
     OtherVolume,
     NotFound,

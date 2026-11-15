@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use rain_platform::{Platform, PlatformError, Root};
 
 use crate::fs::{Fs, Metadata};
+use crate::messages::USERDATA_IDS;
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -54,6 +55,12 @@ fn normalize_component(name: &std::ffi::OsStr) -> OsString {
 
 /// Built-in protected paths, one per line; `~` stands for the home.
 const BUILTIN: &str = include_str!("protected.list");
+
+/// Built-in user data, `<id> <path>` per line (FR-004).
+const BUILTIN_USER_DATA: &str = include_str!("userdata.list");
+
+/// Reported for a path that cannot be compared, so it fails closed.
+const UNCOMPARABLE: &str = "unknown";
 
 /// Why the protection list could not be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +117,7 @@ struct NormalizedPattern {
 #[derive(Debug, Clone)]
 pub struct ProtectList {
     patterns: Vec<NormalizedPattern>,
+    user_data: Vec<(&'static str, NormalizedPattern)>,
     identities: BTreeSet<(u64, u64)>,
 }
 
@@ -119,6 +127,7 @@ impl ProtectList {
         let home = platform.resolve(Root::Home)?;
         Ok(Self {
             patterns: parse_list(BUILTIN, &home)?,
+            user_data: parse_user_data(BUILTIN_USER_DATA, &home)?,
             identities: BTreeSet::new(),
         })
     }
@@ -158,6 +167,29 @@ impl ProtectList {
         self.patterns
             .iter()
             .any(|p| p.literal.starts_with(canonical) || p.normalized.starts_with(&normalized))
+    }
+
+    /// FR-004: the id of the user data entry that `canonical` is, lies inside
+    /// or contains, so a candidate like that is never offered. Same name
+    /// matching as protection; paths that cannot be compared report a hit.
+    pub fn user_data_id(&self, canonical: &Path) -> Option<&'static str> {
+        let Some(normalized) = comparable(canonical) else {
+            return Some(UNCOMPARABLE);
+        };
+        self.user_data
+            .iter()
+            .find(|(_, p)| {
+                canonical.starts_with(&p.literal)
+                    || normalized.starts_with(&p.normalized)
+                    || p.literal.starts_with(canonical)
+                    || p.normalized.starts_with(&normalized)
+            })
+            .map(|(id, _)| *id)
+    }
+
+    /// Ids present in the user data list, one per entry.
+    pub fn user_data_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.user_data.iter().map(|(id, _)| *id)
     }
 
     /// Name check plus identity check of `canonical` alone, using metadata
@@ -217,6 +249,36 @@ fn parse_list(text: &str, home: &Path) -> Result<Vec<NormalizedPattern>, Protect
         });
     }
     Ok(patterns)
+}
+
+/// Parses the user data list: `<id> <path>` per line. The id must be one
+/// of `USERDATA_IDS`; the path goes through the protection list's parser.
+fn parse_user_data(
+    text: &str,
+    home: &Path,
+) -> Result<Vec<(&'static str, NormalizedPattern)>, ProtectError> {
+    let mut out: Vec<(&'static str, NormalizedPattern)> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let invalid = || ProtectError::InvalidEntry(line.to_string());
+        let (id, path) = line.split_once(char::is_whitespace).ok_or_else(invalid)?;
+        let id = USERDATA_IDS
+            .iter()
+            .copied()
+            .find(|known| *known == id)
+            .ok_or_else(invalid)?;
+        let mut parsed = parse_list(path.trim(), home)?;
+        let (Some(pattern), None) = (parsed.pop(), parsed.pop()) else {
+            return Err(invalid());
+        };
+        if out.iter().any(|(_, p)| p.normalized == pattern.normalized) {
+            return Err(ProtectError::DuplicateEntry(line.to_string()));
+        }
+        out.push((id, pattern));
+    }
+    Ok(out)
 }
 
 /// Normalized form of an absolute, fully resolved, UTF-8 path; `None` when
@@ -1576,6 +1638,111 @@ mod engines_tests {
                 "{} became an item",
                 bait.display()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod userdata_tests {
+    use super::*;
+    use crate::messages::USERDATA_IDS;
+    use rain_platform::Os;
+
+    const HOME: &str = "/Users/Tester";
+
+    struct HomeAt;
+
+    impl Platform for HomeAt {
+        fn resolve(&self, _: Root) -> Result<PathBuf, PlatformError> {
+            Ok(PathBuf::from(HOME))
+        }
+        fn is_root_user(&self) -> bool {
+            false
+        }
+        fn os(&self) -> Os {
+            Os::Macos
+        }
+    }
+
+    fn list() -> ProtectList {
+        match ProtectList::builtin(&HomeAt) {
+            Ok(list) => list,
+            Err(e) => panic!("builtin failed: {e}"),
+        }
+    }
+
+    fn hit(rel: &str) -> Option<&'static str> {
+        list().user_data_id(&Path::new(HOME).join(rel))
+    }
+
+    // FR-004: equal, inside and containing all hit, with the entry's id.
+    #[test]
+    fn equal_inside_and_containing_hit_the_entry() {
+        assert_eq!(hit(".codex/sessions"), Some("codex.sessions"));
+        assert_eq!(hit(".codex/sessions/2026/a.jsonl"), Some("codex.sessions"));
+        assert_eq!(hit(".codex"), Some("codex.sessions"));
+        assert_eq!(hit(".codeium/x/y"), Some("codeium.conversations"));
+        assert_eq!(hit(".aider.chat.history.md"), Some("aider.chat-history"));
+        assert_eq!(hit(".claude/projects/p"), Some("claude-code.history"));
+        assert_eq!(hit(".claude/history.jsonl"), Some("claude-code.history"));
+        assert_eq!(hit(".claude"), Some("claude-code.history"));
+    }
+
+    // FR-004: whole components; unrelated siblings do not hit.
+    #[test]
+    fn neighbours_do_not_hit() {
+        for rel in [
+            ".codexx",
+            ".codex/cache",
+            ".codeium-other",
+            ".aider.chat.history.mdx",
+            ".claude/cache",
+            ".claude/projectsx",
+            "Library/Caches",
+        ] {
+            assert_eq!(hit(rel), None, "{rel}");
+        }
+    }
+
+    // FR-004: case and NFC/NFD spellings hit like the protection list does.
+    #[test]
+    fn spelling_variants_hit() {
+        for rel in [
+            ".CODEX/Sessions",
+            ".Codeium/X",
+            ".AIDER.CHAT.HISTORY.MD",
+            ".claude/PROJECTS",
+        ] {
+            assert!(hit(rel).is_some(), "{rel}");
+        }
+        // Decomposed spelling of an accented sibling is not user data.
+        assert_eq!(hit(".codex\u{301}"), None);
+    }
+
+    // FR-004: a path that cannot be compared reliably fails closed.
+    #[test]
+    fn incomparable_paths_fail_closed() {
+        assert!(list().user_data_id(Path::new("relative/path")).is_some());
+        assert!(list()
+            .user_data_id(&Path::new(HOME).join("a/../b"))
+            .is_some());
+    }
+
+    // The ids in the embedded list and `USERDATA_IDS` are the same set.
+    #[test]
+    fn ids_match_userdata_ids() {
+        let mut in_list: Vec<&str> = list().user_data_ids().collect();
+        in_list.sort_unstable();
+        in_list.dedup();
+        let mut known: Vec<&str> = USERDATA_IDS.to_vec();
+        known.sort_unstable();
+        assert_eq!(in_list, known);
+    }
+
+    #[test]
+    fn malformed_user_data_list_is_rejected() {
+        for text in ["codex.sessions", "~/.codex", "x ~/.a\nx ~/.a", "x relative"] {
+            assert!(parse_user_data(text, Path::new(HOME)).is_err(), "{text}");
         }
     }
 }
