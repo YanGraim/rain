@@ -608,6 +608,15 @@ mod tests {
     #[test]
     fn user_data_reason_is_user_data() {
         assert_eq!(reason_str(SkipReason::UserData), "user-data");
+        // The JSON keeps its shape: same fields, only the value is new.
+        let v = json(&report(vec![skipped(
+            "/Users/u/.codeium",
+            SkipReason::UserData,
+        )]));
+        let entry = &v["skipped"][0];
+        assert_eq!(entry["reason"], "user-data");
+        assert_eq!(entry["path"], "/Users/u/.codeium");
+        assert_eq!(entry.as_object().unwrap().len(), 2);
     }
 
     // FR-013: the skipped line uses the singular form for one item.

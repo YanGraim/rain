@@ -663,10 +663,35 @@ mod tests {
             Ok(list) => list.with_identities(fs),
             Err(e) => panic!("builtin failed: {e}"),
         };
+        run_inner(fs, rules, cancel, threads, tools, &protect)
+    }
+
+    fn run_protect(fs: &dyn Fs, rules: &[&dyn Rule], protect: &ProtectList) -> ScanReport {
+        match run_inner(
+            fs,
+            rules,
+            &AtomicBool::new(false),
+            None,
+            &crate::tools::NoTools,
+            protect,
+        ) {
+            Ok(report) => report,
+            Err(e) => panic!("scan failed: {e}"),
+        }
+    }
+
+    fn run_inner(
+        fs: &dyn Fs,
+        rules: &[&dyn Rule],
+        cancel: &AtomicBool,
+        threads: Option<usize>,
+        tools: &dyn ToolRunner,
+        protect: &ProtectList,
+    ) -> Result<ScanReport, ScanError> {
         let roots = roots();
         let ctx = ScanContext {
             fs,
-            protect: &protect,
+            protect,
             roots: &roots,
             rule_ctx: RuleContext {
                 min_age_days: 0,
@@ -845,9 +870,9 @@ mod tests {
         report.items.iter().any(|i| i.path == home_path(rel))
     }
 
-    // FR-004: a candidate that contains user data is refused whole. `.codex`
-    // also holds a protected file, so either reason is accepted (spec 4);
-    // what matters is that it is never an item.
+    // FR-004: `.codex` holds user data and a protected file, so either
+    // reason is fine (spec 4); it is never an item. The pure user data case
+    // is `candidate_holding_only_user_data_is_skipped`.
     #[test]
     fn candidate_containing_user_data_is_skipped() {
         let report = user_data_scan(&[".codex/sessions"], &[], false);
@@ -859,6 +884,24 @@ mod tests {
         );
         assert!(!has_item(&report, ".codex"));
         assert_eq!(report.total_bytes, 0);
+    }
+
+    // FR-004: a folder that holds user data and nothing protected is
+    // refused with the user data reason. Uses a list with only that entry.
+    #[test]
+    fn candidate_holding_only_user_data_is_skipped() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/box", dir(320))
+            .insert("/Users/Tester/box/.aider.chat.history.md", file(321, 8))
+            .insert("/Users/Tester/other", dir(322))
+            .insert("/Users/Tester/other/a", file(323, 8));
+        let protect =
+            ProtectList::only_user_data("aider.chat-history ~/box/.aider.chat.history.md", HOME);
+        let r = rule("test.home", under(Root::Home, ""));
+        let report = run_protect(&fs, &[&r], &protect);
+        assert!(skipped_as_user_data(&report, "box"), "{:?}", report.skipped);
+        assert!(!has_item(&report, "box"));
+        assert!(has_item(&report, "other"));
     }
 
     // FR-004: a candidate inside user data is refused.

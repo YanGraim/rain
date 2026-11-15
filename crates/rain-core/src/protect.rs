@@ -187,6 +187,19 @@ impl ProtectList {
             .map(|(id, _)| *id)
     }
 
+    /// Test helper: no protected paths, only the given user data text.
+    #[cfg(test)]
+    pub(crate) fn only_user_data(text: &str, home: &str) -> Self {
+        match parse_user_data(text, Path::new(home)) {
+            Ok(user_data) => Self {
+                patterns: Vec::new(),
+                user_data,
+                identities: BTreeSet::new(),
+            },
+            Err(e) => panic!("bad user data text: {e}"),
+        }
+    }
+
     /// Ids present in the user data list, one per entry.
     pub fn user_data_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.user_data.iter().map(|(id, _)| *id)
