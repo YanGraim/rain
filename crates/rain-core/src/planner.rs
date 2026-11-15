@@ -558,6 +558,17 @@ fn checked_path(
         skipped.insert(refuse(canonical, SkipReason::OutsideRoot));
         return None;
     }
+    // #163: a path in `~/.claude` comes from the tool, not from a walk that
+    // prunes hidden folders, so it is kept only below a declared root that is
+    // itself in `~/.claude` (a named folder such as `~/.claude/cache`).
+    if ctx.protect.in_claude_home_on(ctx.fs, &canonical)
+        && !roots
+            .iter()
+            .any(|root| canonical.starts_with(root) && ctx.protect.in_claude_home_on(ctx.fs, root))
+    {
+        skipped.insert(refuse(canonical, SkipReason::Protected));
+        return None;
+    }
     Some(canonical)
 }
 
@@ -2125,6 +2136,95 @@ mod tests {
                 path: PathBuf::from("/Users/Tester/.claude/x"),
                 reason: SkipReason::Protected,
             }));
+        }
+
+        /// Home with files under `~/.claude` and next to it.
+        fn claude_paths_fs() -> FakeFs {
+            let mut fs = base();
+            fs.insert("/Users/Tester/.claude", dir(40))
+                .insert("/Users/Tester/.claude/futuro", dir(41))
+                .insert("/Users/Tester/.claude/futuro/old", file(42, 8))
+                .insert("/Users/Tester/.claude/cache", dir(43))
+                .insert("/Users/Tester/.claude/cache/c1", file(44, 8))
+                .insert("/Users/Tester/projeto", dir(45))
+                .insert("/Users/Tester/projeto/x", file(46, 8));
+            fs
+        }
+
+        // #163: a path inside ~/.claude is kept only inside a declared root
+        // that is itself in ~/.claude. With a root that is an ancestor, a
+        // tool path there is dropped as Skipped(Protected), and one outside
+        // ~/.claude is kept.
+        #[test]
+        fn tool_path_in_claude_needs_a_named_root_there() {
+            let brew = provider_with_roots("pkg.homebrew", vec![user_root("/Users/Tester")]);
+            let line = "x 100 /Users/Tester/.claude/futuro/old /Users/Tester/projeto/x";
+            let tools = replying(ToolId::Brew, ok(line));
+            let report = scan_with(&claude_paths_fs(), &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(
+                report.tool_items[0].paths,
+                vec![PathBuf::from("/Users/Tester/projeto/x")]
+            );
+            assert_eq!(
+                report.skipped,
+                vec![Skipped {
+                    path: PathBuf::from("/Users/Tester/.claude/futuro/old"),
+                    reason: SkipReason::Protected,
+                }]
+            );
+        }
+
+        // #163: an item that named only a path in ~/.claude is dropped.
+        #[test]
+        fn item_naming_only_claude_paths_is_dropped() {
+            let brew = provider_with_roots("pkg.homebrew", vec![user_root("/Users/Tester")]);
+            let tools = replying(ToolId::Brew, ok("x 100 /Users/Tester/.claude/futuro/old"));
+            let report = scan_with(&claude_paths_fs(), &[&brew], &tools);
+            assert!(report.tool_items.is_empty(), "{:?}", report.tool_items);
+            assert!(report.skipped.contains(&Skipped {
+                path: PathBuf::from("/Users/Tester/.claude/futuro/old"),
+                reason: SkipReason::Protected,
+            }));
+        }
+
+        // #163: a path outside ~/.claude under an ancestor root is unaffected.
+        #[test]
+        fn tool_path_outside_claude_is_kept() {
+            let brew = provider_with_roots("pkg.homebrew", vec![user_root("/Users/Tester")]);
+            let tools = replying(ToolId::Brew, ok("x 100 /Users/Tester/projeto/x"));
+            let report = scan_with(&claude_paths_fs(), &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        }
+
+        // #163: a named root in ~/.claude keeps its paths.
+        #[test]
+        fn tool_path_inside_a_named_claude_root_is_kept() {
+            let brew = provider_with_roots(
+                "pkg.homebrew",
+                vec![RootedPath::Under(Root::Home, ".claude/cache")],
+            );
+            let tools = replying(ToolId::Brew, ok("x 100 /Users/Tester/.claude/cache/c1"));
+            let report = scan_with(&claude_paths_fs(), &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(
+                report.tool_items[0].paths,
+                vec![PathBuf::from("/Users/Tester/.claude/cache/c1")]
+            );
+            assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        }
+
+        // #163: a named root does not widen to its siblings in ~/.claude.
+        #[test]
+        fn named_claude_root_does_not_cover_a_sibling_folder() {
+            let brew = provider_with_roots(
+                "pkg.homebrew",
+                vec![RootedPath::Under(Root::Home, ".claude/cache")],
+            );
+            let tools = replying(ToolId::Brew, ok("x 100 /Users/Tester/.claude/futuro/old"));
+            let report = scan_with(&claude_paths_fs(), &[&brew], &tools);
+            assert!(report.tool_items.is_empty());
         }
 
         // #161: other spellings of ~/.claude are refused as well.
