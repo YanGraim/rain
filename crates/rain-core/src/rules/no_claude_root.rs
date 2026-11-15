@@ -208,11 +208,7 @@ fn no_builtin_rule_is_rooted_at_claude_or_above() {
 fn home_walkers_are_exactly_the_rules_rooted_at_the_home() {
     let rooted_at_home: Vec<&str> = builtin()
         .iter()
-        .filter(|r| {
-            roots_of(**r)
-                .iter()
-                .any(|root| *root == RootedPath::Under(Root::Home, ""))
-        })
+        .filter(|r| roots_of(**r).contains(&RootedPath::Under(Root::Home, "")))
         .map(|r| r.meta().id.as_str())
         .collect();
     let mut want = HOME_WALKERS.to_vec();
