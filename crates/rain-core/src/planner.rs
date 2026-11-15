@@ -3,7 +3,7 @@
 use crate::fs::Fs;
 use crate::model::{
     ItemId, ProviderStatus, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason, Skipped, ToolItem,
-    ToolStatus, Unavailable, SCHEMA_VERSION,
+    ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
 };
 use crate::protect::ProtectList;
 use crate::rule::{EntryInfo, ProviderRule, RootedPath, Rule, RuleContext, RuleKind};
@@ -68,8 +68,11 @@ pub fn scan(
             Err(panic) => std::panic::resume_unwind(panic),
         };
         let (items, mut skipped) = files?;
+        let unmanaged = measure_unmanaged(ctx, &mut skipped, cancel)?;
         let (tool_items, providers) = check_tool_paths(probes?, ctx, &mut skipped);
-        Ok(report(rules, items, skipped, tool_items, providers))
+        Ok(report(
+            rules, items, skipped, tool_items, providers, unmanaged,
+        ))
     })
 }
 
@@ -118,6 +121,52 @@ fn scan_files(
     }
     let items = refuse_holders_of_protected(items, &mut skipped);
     Ok((items, skipped))
+}
+
+/// FR-004: measures the user data that exists, read only, with the same
+/// walker. These are not rules and have no item id: they only inform. An
+/// entry that is missing is left out silently; one that cannot be measured
+/// is a skip, never an entry with a partial size.
+fn measure_unmanaged(
+    ctx: &ScanContext,
+    skipped: &mut BTreeSet<Skipped>,
+    cancel: &AtomicBool,
+) -> Result<Vec<Unmanaged>, ScanError> {
+    let protect = ctx.protect.for_measuring_user_data(ctx.fs);
+    let threads = ctx
+        .threads
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
+    let mut walker = Walker::new(ctx.fs, &protect)
+        .with_threads(threads)
+        .with_cancel(cancel);
+    let mut found = Vec::new();
+    for (id, path) in ctx.protect.user_data_entries() {
+        if let Err(e) = ctx.fs.symlink_metadata(path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                skipped.insert(Skipped {
+                    path: path.to_path_buf(),
+                    reason: SkipReason::from(&e),
+                });
+            }
+            continue;
+        }
+        let m = walker.measure(path);
+        if m.cancelled {
+            return Err(ScanError::Cancelled);
+        }
+        let unmeasured = m.skipped.iter().any(|s| s.path == path);
+        skipped.extend(m.skipped);
+        if !unmeasured {
+            found.push(Unmanaged {
+                id,
+                path: path.to_path_buf(),
+                allocated_bytes: m.allocated_bytes,
+                file_count: m.file_count,
+            });
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// FR-007: an item that is or contains a protected hit (e.g. a dev+ino
@@ -457,6 +506,7 @@ fn report(
     skipped: BTreeSet<Skipped>,
     tool_items: Vec<ToolItem>,
     providers: Vec<ProviderStatus>,
+    unmanaged: Vec<Unmanaged>,
 ) -> ScanReport {
     let mut totals: Vec<RuleTotal> = rules
         .iter()
@@ -504,6 +554,7 @@ fn report(
         tool_items,
         providers,
         tool_total_bytes,
+        unmanaged,
     }
 }
 
@@ -876,6 +927,156 @@ mod tests {
 
     fn has_item(report: &ScanReport, rel: &str) -> bool {
         report.items.iter().any(|i| i.path == home_path(rel))
+    }
+
+    /// `(id, path, bytes, files)` of every unmanaged entry, in report order.
+    fn unmanaged(report: &ScanReport) -> Vec<(&'static str, PathBuf, u64, u64)> {
+        report
+            .unmanaged
+            .iter()
+            .map(|u| (u.id, u.path.clone(), u.allocated_bytes, u.file_count))
+            .collect()
+    }
+
+    /// Home with the Claude Code projects, a Codex sessions folder next to
+    /// a protected credentials file, and a rule-owned cache file.
+    fn user_data_home() -> FakeFs {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.claude", dir(400))
+            .insert("/Users/Tester/.claude/projects", dir(401))
+            .insert("/Users/Tester/.claude/projects/p1", dir(402))
+            .insert("/Users/Tester/.claude/projects/p1/a.jsonl", file(403, 8))
+            .insert("/Users/Tester/.claude/projects/b.jsonl", file(404, 4))
+            .insert("/Users/Tester/.codex", dir(405))
+            .insert("/Users/Tester/.codex/sessions", dir(406))
+            .insert("/Users/Tester/.codex/sessions/s1", file(407, 2))
+            .insert("/Users/Tester/.codex/auth.json", file(408, 100))
+            .insert(c("app"), dir(409))
+            .insert(c("app/x"), file(410, 6));
+        fs
+    }
+
+    // FR-004, U2: user data that exists is measured and reported under
+    // `unmanaged`, with the id of the user data entry and no item id.
+    #[test]
+    fn claude_projects_reported_as_unmanaged_without_id() {
+        let fs = user_data_home();
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&caches]);
+        let got = unmanaged(&report);
+        assert!(
+            got.contains(&(
+                "claude-code.history",
+                home_path(".claude/projects"),
+                12 * 512,
+                2
+            )),
+            "{got:?}"
+        );
+        // Nothing of it is an item or a skip: it is only informed.
+        assert!(report
+            .items
+            .iter()
+            .all(|i| !i.path.starts_with(home_path(".claude"))));
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    }
+
+    // FR-004: the protected credentials next to user data are not measured.
+    #[test]
+    fn unmanaged_measures_only_the_entry() {
+        let fs = user_data_home();
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&caches]);
+        assert!(unmanaged(&report).contains(&(
+            "codex.sessions",
+            home_path(".codex/sessions"),
+            2 * 512,
+            1
+        )));
+        assert!(report
+            .unmanaged
+            .iter()
+            .all(|u| !u.path.ends_with("auth.json")));
+    }
+
+    // FR-004: unmanaged bytes never enter the totals.
+    #[test]
+    fn unmanaged_not_in_total_bytes() {
+        let fs = user_data_home();
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&caches]);
+        assert!(!report.unmanaged.is_empty());
+        assert_eq!(report.total_bytes, 6 * 512);
+        assert_eq!(totals(&report), vec![("macos.user.caches", 6 * 512, 1)]);
+    }
+
+    // FR-004: an entry that does not exist is not reported, and says nothing.
+    #[test]
+    fn missing_user_data_is_not_reported() {
+        let report = run(&base(), &[]);
+        assert!(report.unmanaged.is_empty());
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        // Only the existing ones show up.
+        let report = run(&user_data_home(), &[]);
+        let ids: Vec<&str> = report.unmanaged.iter().map(|u| u.id).collect();
+        assert_eq!(ids, vec!["claude-code.history", "codex.sessions"]);
+    }
+
+    // FR-010: sorted by (id, path), same input gives the same report.
+    #[test]
+    fn unmanaged_is_sorted_and_stable() {
+        let mut fs = user_data_home();
+        fs.insert("/Users/Tester/.claude/history.jsonl", file(420, 1))
+            .insert("/Users/Tester/.aider.chat.history.md", file(421, 1))
+            .insert("/Users/Tester/.codeium", dir(422));
+        let a = run(&fs, &[]);
+        let ids: Vec<(&str, PathBuf)> =
+            a.unmanaged.iter().map(|u| (u.id, u.path.clone())).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+        assert_eq!(ids.len(), 5);
+        assert_eq!(run(&fs, &[]), a);
+    }
+
+    // FR-004: nothing is silent: an entry that cannot be read is a skip, not
+    // an entry with a wrong size; a symlink is refused like anywhere else.
+    #[test]
+    fn unreadable_or_symlinked_user_data_is_skipped_not_reported() {
+        let mut fs = user_data_home();
+        fs.fail_with(
+            "/Users/Tester/.claude/projects",
+            io::ErrorKind::PermissionDenied,
+        );
+        fs.insert_symlink("/Users/Tester/.codeium", "/Users/Tester/.codex");
+        let report = run(&fs, &[]);
+        assert!(report
+            .unmanaged
+            .iter()
+            .all(|u| u.id != "claude-code.history"));
+        assert!(report
+            .unmanaged
+            .iter()
+            .all(|u| u.id != "codeium.conversations"));
+        assert!(report.skipped.contains(&Skipped {
+            path: home_path(".claude/projects"),
+            reason: SkipReason::PermissionDenied,
+        }));
+        assert!(report.skipped.contains(&Skipped {
+            path: home_path(".codeium"),
+            reason: SkipReason::Symlink,
+        }));
+    }
+
+    // FR-011: a cancelled scan is an error, never a partial unmanaged size.
+    #[test]
+    fn cancelled_scan_has_no_report_with_unmanaged() {
+        let fs = user_data_home();
+        let cancel = AtomicBool::new(true);
+        assert!(matches!(
+            run_on(&fs, &[], &cancel),
+            Err(ScanError::Cancelled)
+        ));
     }
 
     // FR-004: `.codex` holds user data and a protected file, so either

@@ -249,3 +249,37 @@ fn folder_holding_an_alias_of_user_data_is_refused() {
         report.skipped
     );
 }
+
+// FR-004 (U2): on a real filesystem the user data that exists is measured
+// and informed, even where the built-in protection list also names it
+// (`~/.claude/projects`); the protected credentials next to it are not.
+#[test]
+fn existing_user_data_is_reported_as_unmanaged() {
+    let h = Home::new();
+    h.dir(".claude/projects/p1");
+    h.dir(".codex/sessions");
+    h.file(".codex/auth.json");
+    h.file(".aider.chat.history.md");
+    let report = h.scan(Vec::new());
+    let got: Vec<(&str, PathBuf, u64)> = report
+        .unmanaged
+        .iter()
+        .map(|u| (u.id, u.path.clone(), u.file_count))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "aider.chat-history",
+                h.path.join(".aider.chat.history.md"),
+                1
+            ),
+            ("claude-code.history", h.path.join(".claude/projects"), 1),
+            ("codex.sessions", h.path.join(".codex/sessions"), 1),
+        ]
+    );
+    assert!(report.unmanaged.iter().all(|u| u.allocated_bytes > 0));
+    assert!(report.items.is_empty());
+    assert_eq!(report.total_bytes, 0);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+}
