@@ -128,18 +128,24 @@ fn refuse_holders_of_protected(
     items: Vec<ScanItem>,
     skipped: &mut BTreeSet<Skipped>,
 ) -> Vec<ScanItem> {
-    let hits: Vec<PathBuf> = skipped
+    // FR-004: a user data hit inside an item is refused the same way.
+    let hits: Vec<(PathBuf, SkipReason)> = skipped
         .iter()
-        .filter(|s| s.reason == SkipReason::Protected)
-        .map(|s| s.path.clone())
+        .filter(|s| matches!(s.reason, SkipReason::Protected | SkipReason::UserData))
+        .map(|s| (s.path.clone(), s.reason))
         .collect();
-    let (refused, kept): (Vec<_>, Vec<_>) = items
-        .into_iter()
-        .partition(|item| hits.iter().any(|h| h.starts_with(&item.path)));
-    skipped.extend(refused.into_iter().map(|item| Skipped {
-        path: item.path,
-        reason: SkipReason::Protected,
-    }));
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items {
+        match hits.iter().find(|(h, _)| h.starts_with(&item.path)) {
+            Some((_, reason)) => {
+                skipped.insert(Skipped {
+                    path: item.path,
+                    reason: *reason,
+                });
+            }
+            None => kept.push(item),
+        }
+    }
     kept
 }
 
@@ -429,7 +435,9 @@ fn checked_path(
         skipped.insert(refuse(canonical, SkipReason::Protected));
         return None;
     }
-    if ctx.protect.user_data_id(&canonical).is_some() {
+    if ctx.protect.user_data_id(&canonical).is_some()
+        || ctx.protect.user_data_alias_on(ctx.fs, &canonical).is_some()
+    {
         skipped.insert(refuse(canonical, SkipReason::UserData));
         return None;
     }
@@ -1757,6 +1765,47 @@ mod tests {
                 )]
             );
             assert!(report.tool_items.is_empty());
+        }
+
+        // FR-004: a path named by a tool that is another name (same dev+ino)
+        // for a user data file, or lies under another name of a user data
+        // folder, is dropped as Skipped(UserData) and never reported.
+        #[test]
+        fn user_data_alias_reported_by_tool_is_dropped() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8))
+                // same dev+ino as `~/.aider.chat.history.md`
+                .insert("/Users/Tester/.aider.chat.history.md", file(30, 8))
+                .insert(c("Homebrew/notes.md"), file(30, 8))
+                // same dev+ino as `~/.codeium`, with a file below it
+                .insert("/Users/Tester/.codeium", dir(31))
+                .insert(c("Homebrew/shortcut"), dir(31))
+                .insert(c("Homebrew/shortcut/chat.db"), file(32, 8));
+            let brew = provider("pkg.homebrew", ToolId::Brew);
+            let line = format!(
+                "x 100 {} {} {}",
+                c("Homebrew/old.tgz").display(),
+                c("Homebrew/notes.md").display(),
+                c("Homebrew/shortcut/chat.db").display(),
+            );
+            let tools = replying(ToolId::Brew, ok(&line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(report.tool_items[0].paths, vec![c("Homebrew/old.tgz")]);
+            assert_eq!(
+                report.skipped,
+                vec![
+                    Skipped {
+                        path: c("Homebrew/notes.md"),
+                        reason: SkipReason::UserData,
+                    },
+                    Skipped {
+                        path: c("Homebrew/shortcut/chat.db"),
+                        reason: SkipReason::UserData,
+                    },
+                ]
+            );
         }
 
         // FR-007

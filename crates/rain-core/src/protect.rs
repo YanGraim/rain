@@ -1,6 +1,6 @@
 //! Protection list: built-in protected paths and path normalization.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -119,6 +119,8 @@ pub struct ProtectList {
     patterns: Vec<NormalizedPattern>,
     user_data: Vec<(&'static str, NormalizedPattern)>,
     identities: BTreeSet<(u64, u64)>,
+    /// `(dev, ino)` of every user data entry that exists, with its id.
+    user_data_identities: BTreeMap<(u64, u64), &'static str>,
 }
 
 impl ProtectList {
@@ -129,6 +131,7 @@ impl ProtectList {
             patterns: parse_list(BUILTIN, &home)?,
             user_data: parse_user_data(BUILTIN_USER_DATA, &home)?,
             identities: BTreeSet::new(),
+            user_data_identities: BTreeMap::new(),
         })
     }
 
@@ -138,11 +141,14 @@ impl ProtectList {
     /// Missing or unreadable entries are skipped: the name check covers them.
     pub fn with_identities(mut self, fs: &dyn Fs) -> Self {
         for pattern in &self.patterns {
-            let Ok(canonical) = fs.canonicalize(&pattern.literal) else {
-                continue;
-            };
-            if let Ok(meta) = fs.symlink_metadata(&canonical) {
-                self.identities.insert((meta.dev, meta.ino));
+            if let Some(identity) = identity_of(fs, &pattern.literal) {
+                self.identities.insert(identity);
+            }
+        }
+        // FR-004: user data is recognised by identity too.
+        for (id, pattern) in &self.user_data {
+            if let Some(identity) = identity_of(fs, &pattern.literal) {
+                self.user_data_identities.insert(identity, id);
             }
         }
         self
@@ -187,6 +193,46 @@ impl ProtectList {
             .map(|(id, _)| *id)
     }
 
+    /// FR-004: the entry whose identity `meta` has when `canonical` is not
+    /// already named as one. Names are handled by [`Self::user_data_id`]
+    /// (the planner refuses those candidates); this catches another name for
+    /// the same file or folder (hard link, firmlink spelling).
+    pub fn user_data_alias(&self, canonical: &Path, meta: &Metadata) -> Option<&'static str> {
+        let by_name = comparable(canonical).is_some_and(|n| {
+            self.user_data
+                .iter()
+                .any(|(_, p)| canonical.starts_with(&p.literal) || n.starts_with(&p.normalized))
+        });
+        if by_name {
+            return None;
+        }
+        self.user_data_identities
+            .get(&(meta.dev, meta.ino))
+            .copied()
+    }
+
+    /// Like [`Self::user_data_alias`] for a path and all its ancestors,
+    /// read through `fs`. An ancestor that cannot be read fails closed.
+    pub fn user_data_alias_on(&self, fs: &dyn Fs, canonical: &Path) -> Option<&'static str> {
+        if self.user_data_identities.is_empty() {
+            return None;
+        }
+        canonical
+            .ancestors()
+            .find_map(|ancestor| match fs.symlink_metadata(ancestor) {
+                Ok(meta) => self
+                    .user_data_identities
+                    .get(&(meta.dev, meta.ino))
+                    .copied(),
+                Err(_) => Some(UNCOMPARABLE),
+            })
+    }
+
+    /// Ids present in the user data list, one per entry.
+    pub fn user_data_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.user_data.iter().map(|(id, _)| *id)
+    }
+
     /// Test helper: no protected paths, only the given user data text.
     #[cfg(test)]
     pub(crate) fn only_user_data(text: &str, home: &str) -> Self {
@@ -195,14 +241,10 @@ impl ProtectList {
                 patterns: Vec::new(),
                 user_data,
                 identities: BTreeSet::new(),
+                user_data_identities: BTreeMap::new(),
             },
             Err(e) => panic!("bad user data text: {e}"),
         }
-    }
-
-    /// Ids present in the user data list, one per entry.
-    pub fn user_data_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.user_data.iter().map(|(id, _)| *id)
     }
 
     /// Name check plus identity check of `canonical` alone, using metadata
@@ -262,6 +304,14 @@ fn parse_list(text: &str, home: &Path) -> Result<Vec<NormalizedPattern>, Protect
         });
     }
     Ok(patterns)
+}
+
+/// `(dev, ino)` of an existing path, resolved through `fs`; `None` when it
+/// is missing or unreadable (the name check covers those).
+fn identity_of(fs: &dyn Fs, literal: &Path) -> Option<(u64, u64)> {
+    let canonical = fs.canonicalize(literal).ok()?;
+    let meta = fs.symlink_metadata(&canonical).ok()?;
+    Some((meta.dev, meta.ino))
 }
 
 /// Parses the user data list: `<id> <path>` per line. The id must be one
