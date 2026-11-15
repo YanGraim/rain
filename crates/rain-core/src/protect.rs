@@ -1840,6 +1840,41 @@ mod userdata_tests {
         assert_eq!(in_list, known);
     }
 
+    // The measuring copy relaxes exactly the protected paths that lie
+    // inside a user data entry and nothing else.
+    #[test]
+    fn measuring_copy_relaxes_only_what_lies_inside_an_entry() {
+        let full = list();
+        let copy = full.for_measuring_user_data(&crate::fs::FakeFs::new());
+        let literals = |l: &ProtectList| -> BTreeSet<PathBuf> {
+            l.patterns.iter().map(|p| p.literal.clone()).collect()
+        };
+        let removed: BTreeSet<PathBuf> = literals(&full)
+            .difference(&literals(&copy))
+            .cloned()
+            .collect();
+        let home = Path::new(HOME);
+        let expected: BTreeSet<PathBuf> = [".claude/projects", ".claude/history.jsonl"]
+            .iter()
+            .map(|rel| home.join(rel))
+            .collect();
+        assert_eq!(removed, expected);
+        for rel in [
+            ".claude/.credentials.json",
+            ".claude/settings.json",
+            ".codex/auth.json",
+            ".ssh",
+            ".gnupg",
+        ] {
+            assert!(copy.is_protected(&home.join(rel)), "{rel}");
+        }
+        // The copy carries no user data rule of its own.
+        assert_eq!(copy.user_data_id(&home.join(".codeium")), None);
+        // Relaxed, but only for the entry itself and below.
+        assert!(!copy.is_protected(&home.join(".claude/projects/p1")));
+        assert!(copy.is_protected(&home.join(".claude/todos")));
+    }
+
     #[test]
     fn malformed_user_data_list_is_rejected() {
         for text in ["codex.sessions", "~/.codex", "x ~/.a\nx ~/.a", "x relative"] {
