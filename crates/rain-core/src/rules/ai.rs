@@ -70,7 +70,7 @@ static CLAUDE_CODE_LOGS: ChildrenOf = ChildrenOf {
     depth: 1,
 };
 
-/// AI2d: Claude Code CLI binaries in `~/.local/share/claude/versions`.
+/// Claude Code CLI binaries in `~/.local/share/claude/versions`.
 /// The one `~/.local/bin/claude` points at and the highest version stay;
 /// without a symlink that resolves into the folder nothing is listed.
 static CLAUDE_CODE_OLD_VERSIONS: OldVersions = OldVersions {

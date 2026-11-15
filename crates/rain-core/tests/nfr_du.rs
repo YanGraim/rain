@@ -4,7 +4,7 @@
 // Building the fixture needs create_dir/write, which clippy.toml bans for the
 // read-only scan code. Spawning `du` lives only in this test.
 #![cfg(unix)]
-#![allow(clippy::disallowed_methods)]
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use rain_core::fs::StdFs;
 use rain_core::protect::ProtectList;
