@@ -60,14 +60,16 @@ pub fn scan(
     if cancel.load(Ordering::SeqCst) {
         return Err(ScanError::Cancelled);
     }
+    let (blocked, refusals) = refuse_claude_providers(rules, ctx);
     std::thread::scope(|s| {
-        let probes = s.spawn(|| probe_all(rules, ctx.tools, cancel));
+        let probes = s.spawn(|| probe_all(rules, ctx.tools, cancel, &blocked));
         let files = scan_files(rules, ctx, cancel);
         let probes = match probes.join() {
             Ok(probes) => probes,
             Err(panic) => std::panic::resume_unwind(panic),
         };
         let (items, mut skipped) = files?;
+        skipped.extend(refusals);
         let unmanaged = measure_unmanaged(ctx, &mut skipped, cancel)?;
         let (tool_items, providers) = check_tool_paths(probes?, ctx, &mut skipped);
         Ok(report(
@@ -359,18 +361,56 @@ type Probe<'r> = (
     Result<Vec<ProviderItem>, Unavailable>,
 );
 
+/// #161: a root the user supplied may not be `~/.claude` or lie inside it,
+/// whichever kind of rule takes it. Returns the providers whose roots are
+/// all refused (they are not probed and report nothing) and one skip, with
+/// the protection reason, for every refused root.
+fn refuse_claude_providers(
+    rules: &[&dyn Rule],
+    ctx: &ScanContext,
+) -> (BTreeSet<RuleId>, Vec<Skipped>) {
+    let mut blocked = BTreeSet::new();
+    let mut skipped = Vec::new();
+    for rule in rules {
+        let RuleKind::Provider(provider) = rule.kind() else {
+            continue;
+        };
+        let roots = provider.roots();
+        let refused: Vec<&PathBuf> = roots
+            .iter()
+            .filter_map(|r| match r {
+                RootedPath::User(path) if ctx.protect.in_claude_home_on(ctx.fs, path) => Some(path),
+                _ => None,
+            })
+            .collect();
+        if !roots.is_empty() && refused.len() == roots.len() {
+            blocked.insert(rule.meta().id);
+        }
+        skipped.extend(refused.into_iter().map(|path| Skipped {
+            path: path.clone(),
+            reason: SkipReason::Protected,
+        }));
+    }
+    (blocked, skipped)
+}
+
 /// Runs every provider probe in registry order. Only a cancel stops it;
 /// any other failure makes that one provider unavailable (FR-022).
 fn probe_all<'r>(
     rules: &[&'r dyn Rule],
     tools: &dyn ToolRunner,
     cancel: &AtomicBool,
+    blocked: &BTreeSet<RuleId>,
 ) -> Result<Vec<Probe<'r>>, ScanError> {
     let mut probes = Vec::new();
     for &rule in rules {
         let RuleKind::Provider(provider) = rule.kind() else {
             continue;
         };
+        // #161: a provider left without any usable root is not even probed.
+        if blocked.contains(&rule.meta().id) {
+            continue;
+        }
         if cancel.load(Ordering::SeqCst) {
             return Err(ScanError::Cancelled);
         }
@@ -462,6 +502,17 @@ fn provider_roots(
         .roots()
         .iter()
         .filter_map(|rooted| match resolve(rooted, ctx.roots) {
+            // #161: the same refusal as for the roots of file rules.
+            Ok((root, _))
+                if matches!(rooted, RootedPath::User(_))
+                    && ctx.protect.in_claude_home_on(ctx.fs, &root) =>
+            {
+                skipped.insert(Skipped {
+                    path: root,
+                    reason: SkipReason::Protected,
+                });
+                None
+            }
             Ok((root, _)) => ctx.fs.canonicalize(&root).ok(),
             Err(refused) => {
                 skipped.insert(refused);
@@ -1976,6 +2027,118 @@ mod tests {
                 )]
             );
             assert!(report.tool_items.is_empty());
+        }
+
+        fn provider_with_roots(id: &'static str, roots: Vec<RootedPath>) -> TestProvider {
+            let mut p = provider(id, ToolId::Brew);
+            p.roots = roots;
+            p
+        }
+
+        fn user_root(path: &str) -> RootedPath {
+            RootedPath::User(PathBuf::from(path))
+        }
+
+        // #161: a provider whose only roots are user roots in ~/.claude is
+        // not probed and reports nothing; each root is a skip with the
+        // existing protection reason.
+        #[test]
+        fn provider_with_user_roots_in_claude_is_not_probed() {
+            let mut fs = base();
+            fs.insert("/Users/Tester/.claude", dir(40))
+                .insert("/Users/Tester/.claude/x", dir(41))
+                .insert("/Users/Tester/.claude/x/old", file(42, 8));
+            let brew = provider_with_roots(
+                "pkg.homebrew",
+                vec![
+                    user_root("/Users/Tester/.claude"),
+                    user_root("/Users/Tester/.claude/x"),
+                ],
+            );
+            let line = "x 100 /Users/Tester/.claude/x/old";
+            let tools = replying(ToolId::Brew, ok(line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert!(tools.calls().is_empty(), "{:?}", tools.calls());
+            assert!(report.tool_items.is_empty());
+            assert!(report.providers.is_empty(), "{:?}", report.providers);
+            assert_eq!(
+                report.skipped,
+                vec![
+                    Skipped {
+                        path: PathBuf::from("/Users/Tester/.claude"),
+                        reason: SkipReason::Protected,
+                    },
+                    Skipped {
+                        path: PathBuf::from("/Users/Tester/.claude/x"),
+                        reason: SkipReason::Protected,
+                    },
+                ]
+            );
+        }
+
+        // #161: a user root that is not in ~/.claude works as before.
+        #[test]
+        fn provider_with_normal_user_root_is_probed() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8));
+            let brew = provider_with_roots(
+                "pkg.homebrew",
+                vec![user_root(c("Homebrew").to_str().unwrap_or_default())],
+            );
+            let line = format!("x 100 {}", c("Homebrew/old.tgz").display());
+            let tools = replying(ToolId::Brew, ok(&line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(tools.calls().len(), 1);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(report.tool_items[0].paths, vec![c("Homebrew/old.tgz")]);
+            assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        }
+
+        // #161: with a usable root left, the provider still runs, but a path
+        // below the refused root is never kept.
+        #[test]
+        fn refused_user_root_is_dropped_but_other_roots_work() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8))
+                .insert("/Users/Tester/.claude", dir(40))
+                .insert("/Users/Tester/.claude/x", dir(41))
+                .insert("/Users/Tester/.claude/x/old", file(42, 8));
+            let brew = provider_with_roots(
+                "pkg.homebrew",
+                vec![
+                    user_root("/Users/Tester/.claude/x"),
+                    RootedPath::Under(Root::Caches, "Homebrew"),
+                ],
+            );
+            let line = format!(
+                "x 100 {} /Users/Tester/.claude/x/old",
+                c("Homebrew/old.tgz").display()
+            );
+            let tools = replying(ToolId::Brew, ok(&line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(tools.calls().len(), 1);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(report.tool_items[0].paths, vec![c("Homebrew/old.tgz")]);
+            assert!(report.skipped.contains(&Skipped {
+                path: PathBuf::from("/Users/Tester/.claude/x"),
+                reason: SkipReason::Protected,
+            }));
+        }
+
+        // #161: other spellings of ~/.claude are refused as well.
+        #[test]
+        fn provider_user_root_in_other_spelling_is_refused() {
+            let brew =
+                provider_with_roots("pkg.homebrew", vec![user_root("/Users/Tester/.CLAUDE/x")]);
+            let tools = replying(ToolId::Brew, ok("x 1"));
+            let report = scan_with(&base(), &[&brew], &tools);
+            assert!(tools.calls().is_empty());
+            assert!(report.skipped.contains(&Skipped {
+                path: PathBuf::from("/Users/Tester/.CLAUDE/x"),
+                reason: SkipReason::Protected,
+            }));
         }
 
         // FR-004: a path named by a tool that is another name (same dev+ino)
