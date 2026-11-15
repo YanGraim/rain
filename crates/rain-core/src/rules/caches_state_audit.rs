@@ -87,6 +87,23 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
         "com.keepersecurity.safari.keeperfill",
         "com.keepersecurity.safari.keeperfill/db",
     ),
+    // Exact ids from the Homebrew cask stanzas (zap or uninstall quit) of
+    // LastPass, KeePassXC (its older id), RoboForm and NordPass.
+    (
+        "com.lastpass.lastpassmacdesktop",
+        "com.lastpass.lastpassmacdesktop/db",
+    ),
+    ("org.keepassx.keepassxc", "org.keepassx.keepassxc/db"),
+    ("com.SiberSystems.RoboForm", "com.SiberSystems.RoboForm/db"),
+    (
+        "com.SiberSystems.RoboForm.RoboFormService",
+        "com.SiberSystems.RoboForm.RoboFormService/db",
+    ),
+    (
+        "com.sibersystems.RoboFormMac",
+        "com.sibersystems.RoboFormMac/db",
+    ),
+    ("com.nordsec.nordpass", "com.nordsec.nordpass/db"),
 ];
 
 /// Children owned by `sys.sensitive-caches` (high, not preselected): sign-in

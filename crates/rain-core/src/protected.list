@@ -111,6 +111,15 @@
 ~/Library/Caches/com.markmcguill.strongbox.graphene
 ~/Library/Caches/com.keepassium.ios.pro
 ~/Library/Caches/com.keepersecurity.safari.keeperfill
+# Exact ids from the Homebrew cask stanzas (zap or uninstall quit): LastPass,
+# KeePassXC (its older id, besides org.keepassxc.keepassxc), RoboForm, NordPass.
+# The NordPass updater cache and the wildcard variants stay out (no prefixes).
+~/Library/Caches/com.lastpass.lastpassmacdesktop
+~/Library/Caches/org.keepassx.keepassxc
+~/Library/Caches/com.SiberSystems.RoboForm
+~/Library/Caches/com.SiberSystems.RoboForm.RoboFormService
+~/Library/Caches/com.sibersystems.RoboFormMac
+~/Library/Caches/com.nordsec.nordpass
 
 # Claude Code user data: config, credentials, sessions and history.
 # ~/.claude itself stays open so the cache and debug log rules still work.
