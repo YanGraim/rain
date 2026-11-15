@@ -94,6 +94,15 @@
 ~/Library/Caches/com.dashlane.Dashlane
 ~/Library/Caches/in.sinew.Enpass-Desktop
 ~/Library/Caches/org.keepassxc.keepassxc
+# More managers, exact bundle ids only (no prefix entries in this format):
+# Proton Pass (desktop), Strongbox (macOS), MacPass, KeePassium, Keeper
+# (desktop and Mac App Store).
+~/Library/Caches/me.proton.pass.electron
+~/Library/Caches/com.markmcguill.strongbox.mac
+~/Library/Caches/com.hicknhacksoftware.MacPass
+~/Library/Caches/com.keepassium.ios
+~/Library/Caches/com.keepersecurity.passwordmanager
+~/Library/Caches/com.callpod.keepermac.lite
 
 # Claude Code user data: config, credentials, sessions and history.
 # ~/.claude itself stays open so the cache and debug log rules still work.

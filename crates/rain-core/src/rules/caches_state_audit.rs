@@ -51,6 +51,25 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
     ("com.dashlane.Dashlane", "com.dashlane.Dashlane/db"),
     ("in.sinew.Enpass-Desktop", "in.sinew.Enpass-Desktop/db"),
     ("org.keepassxc.keepassxc", "org.keepassxc.keepassxc/db"),
+    // More managers, with exact bundle ids from a source (see the handoff).
+    ("me.proton.pass.electron", "me.proton.pass.electron/db"),
+    (
+        "com.markmcguill.strongbox.mac",
+        "com.markmcguill.strongbox.mac/db",
+    ),
+    (
+        "com.hicknhacksoftware.MacPass",
+        "com.hicknhacksoftware.MacPass/db",
+    ),
+    ("com.keepassium.ios", "com.keepassium.ios/db"),
+    (
+        "com.keepersecurity.passwordmanager",
+        "com.keepersecurity.passwordmanager/db",
+    ),
+    (
+        "com.callpod.keepermac.lite",
+        "com.callpod.keepermac.lite/db",
+    ),
 ];
 
 /// Children owned by `sys.sensitive-caches` (high, not preselected): sign-in
