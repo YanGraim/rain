@@ -5,6 +5,8 @@
 mod ai;
 mod apple;
 mod browser;
+#[cfg(test)]
+mod caches_state_audit;
 mod children;
 mod containers;
 mod extensions;
