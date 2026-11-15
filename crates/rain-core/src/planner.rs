@@ -1767,6 +1767,47 @@ mod tests {
             assert!(report.tool_items.is_empty());
         }
 
+        // FR-004: a path named by a tool that is another name (same dev+ino)
+        // for a user data file, or lies under another name of a user data
+        // folder, is dropped as Skipped(UserData) and never reported.
+        #[test]
+        fn user_data_alias_reported_by_tool_is_dropped() {
+            let mut fs = base();
+            fs.insert(c("Homebrew"), dir(10))
+                .insert(c("Homebrew/old.tgz"), file(11, 8))
+                // same dev+ino as `~/.aider.chat.history.md`
+                .insert("/Users/Tester/.aider.chat.history.md", file(30, 8))
+                .insert(c("Homebrew/notes.md"), file(30, 8))
+                // same dev+ino as `~/.codeium`, with a file below it
+                .insert("/Users/Tester/.codeium", dir(31))
+                .insert(c("Homebrew/shortcut"), dir(31))
+                .insert(c("Homebrew/shortcut/chat.db"), file(32, 8));
+            let brew = provider("pkg.homebrew", ToolId::Brew);
+            let line = format!(
+                "x 100 {} {} {}",
+                c("Homebrew/old.tgz").display(),
+                c("Homebrew/notes.md").display(),
+                c("Homebrew/shortcut/chat.db").display(),
+            );
+            let tools = replying(ToolId::Brew, ok(&line));
+            let report = scan_with(&fs, &[&brew], &tools);
+            assert_eq!(report.tool_items.len(), 1);
+            assert_eq!(report.tool_items[0].paths, vec![c("Homebrew/old.tgz")]);
+            assert_eq!(
+                report.skipped,
+                vec![
+                    Skipped {
+                        path: c("Homebrew/notes.md"),
+                        reason: SkipReason::UserData,
+                    },
+                    Skipped {
+                        path: c("Homebrew/shortcut/chat.db"),
+                        reason: SkipReason::UserData,
+                    },
+                ]
+            );
+        }
+
         // FR-007
         #[test]
         fn protected_path_reported_by_tool_is_dropped() {
