@@ -270,6 +270,9 @@ impl<'a> Walker<'a> {
         if self.protect.is_protected_on(self.fs, root) {
             return Err(SkipReason::Protected);
         }
+        if self.protect.user_data_alias_on(self.fs, root).is_some() {
+            return Err(SkipReason::UserData);
+        }
         Ok(meta)
     }
 
@@ -450,6 +453,9 @@ impl<'a> Walker<'a> {
         }
         if self.protect.is_protected_entry(path, &meta) {
             return Err(SkipReason::Protected);
+        }
+        if self.protect.user_data_alias(path, &meta).is_some() {
+            return Err(SkipReason::UserData);
         }
         Ok(meta)
     }

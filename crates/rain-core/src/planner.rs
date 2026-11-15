@@ -128,18 +128,24 @@ fn refuse_holders_of_protected(
     items: Vec<ScanItem>,
     skipped: &mut BTreeSet<Skipped>,
 ) -> Vec<ScanItem> {
-    let hits: Vec<PathBuf> = skipped
+    // FR-004: a user data hit inside an item is refused the same way.
+    let hits: Vec<(PathBuf, SkipReason)> = skipped
         .iter()
-        .filter(|s| s.reason == SkipReason::Protected)
-        .map(|s| s.path.clone())
+        .filter(|s| matches!(s.reason, SkipReason::Protected | SkipReason::UserData))
+        .map(|s| (s.path.clone(), s.reason))
         .collect();
-    let (refused, kept): (Vec<_>, Vec<_>) = items
-        .into_iter()
-        .partition(|item| hits.iter().any(|h| h.starts_with(&item.path)));
-    skipped.extend(refused.into_iter().map(|item| Skipped {
-        path: item.path,
-        reason: SkipReason::Protected,
-    }));
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items {
+        match hits.iter().find(|(h, _)| h.starts_with(&item.path)) {
+            Some((_, reason)) => {
+                skipped.insert(Skipped {
+                    path: item.path,
+                    reason: *reason,
+                });
+            }
+            None => kept.push(item),
+        }
+    }
     kept
 }
 
@@ -429,7 +435,9 @@ fn checked_path(
         skipped.insert(refuse(canonical, SkipReason::Protected));
         return None;
     }
-    if ctx.protect.user_data_id(&canonical).is_some() {
+    if ctx.protect.user_data_id(&canonical).is_some()
+        || ctx.protect.user_data_alias_on(ctx.fs, &canonical).is_some()
+    {
         skipped.insert(refuse(canonical, SkipReason::UserData));
         return None;
     }
