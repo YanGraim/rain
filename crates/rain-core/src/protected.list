@@ -103,6 +103,14 @@
 ~/Library/Caches/com.keepassium.ios
 ~/Library/Caches/com.keepersecurity.passwordmanager
 ~/Library/Caches/com.callpod.keepermac.lite
+# Exist per their vendors' catalogue, not confirmed to write to Caches:
+# protected as a precaution (when in doubt, protect).
+~/Library/Caches/me.proton.pass.catalyst
+~/Library/Caches/com.markmcguill.strongbox
+~/Library/Caches/com.markmcguill.strongbox.pro
+~/Library/Caches/com.markmcguill.strongbox.graphene
+~/Library/Caches/com.keepassium.ios.pro
+~/Library/Caches/com.keepersecurity.safari.keeperfill
 
 # Claude Code user data: config, credentials, sessions and history.
 # ~/.claude itself stays open so the cache and debug log rules still work.

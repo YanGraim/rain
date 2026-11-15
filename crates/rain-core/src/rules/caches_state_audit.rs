@@ -70,6 +70,23 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
         "com.callpod.keepermac.lite",
         "com.callpod.keepermac.lite/db",
     ),
+    // Exist per their vendors' catalogue, not confirmed to write to Caches:
+    // protected as a precaution (when in doubt, protect).
+    ("me.proton.pass.catalyst", "me.proton.pass.catalyst/db"),
+    ("com.markmcguill.strongbox", "com.markmcguill.strongbox/db"),
+    (
+        "com.markmcguill.strongbox.pro",
+        "com.markmcguill.strongbox.pro/db",
+    ),
+    (
+        "com.markmcguill.strongbox.graphene",
+        "com.markmcguill.strongbox.graphene/db",
+    ),
+    ("com.keepassium.ios.pro", "com.keepassium.ios.pro/db"),
+    (
+        "com.keepersecurity.safari.keeperfill",
+        "com.keepersecurity.safari.keeperfill/db",
+    ),
 ];
 
 /// Children owned by `sys.sensitive-caches` (high, not preselected): sign-in
