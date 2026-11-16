@@ -372,6 +372,7 @@ dependencies = [
  "proptest",
  "rain-core",
  "rain-platform",
+ "rustix",
  "serde_json",
  "tempfile",
  "thiserror",

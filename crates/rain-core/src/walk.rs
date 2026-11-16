@@ -1,6 +1,6 @@
 //! Directory walker that measures allocated size.
 
-use crate::fs::{Fs, Metadata};
+use crate::fs::{is_swapped, Fs, Metadata};
 use crate::protect::ProtectList;
 use crate::rule::Visit;
 use std::collections::{BTreeSet, HashSet};
@@ -15,6 +15,10 @@ const BLOCK_SIZE: u64 = 512;
 /// in memory at once; merge order is unchanged, so results stay
 /// deterministic.
 const LEVEL_BATCH: usize = 256;
+
+/// A directory waiting to be listed: its path, its own blocks and the
+/// `(dev, ino)` it had when it was admitted, which the listing must still see.
+type Queued = (PathBuf, u64, (u64, u64));
 
 /// No exclusions: what [`Walker::measure`] and discovery pass down.
 static NOTHING_EXCLUDED: BTreeSet<PathBuf> = BTreeSet::new();
@@ -200,7 +204,7 @@ impl<'a> Walker<'a> {
             let mut next = Vec::new();
             for batch in level.chunks(LEVEL_BATCH) {
                 let listed = self.read_level(batch, root_meta.dev, &NOTHING_EXCLUDED);
-                for ((dir, _), listing) in batch.iter().zip(listed) {
+                for ((dir, _, _), listing) in batch.iter().zip(listed) {
                     match listing {
                         Listing::Cancelled => {
                             out.cancelled = true;
@@ -234,14 +238,14 @@ impl<'a> Walker<'a> {
         depth: usize,
         visit: &mut dyn FnMut(&Path, &Metadata, usize) -> Visit,
         dirs: &mut HashSet<(u64, u64)>,
-        next: &mut Vec<(PathBuf, u64)>,
+        next: &mut Vec<Queued>,
         out: &mut Discovery,
     ) {
         match visit(&path, &meta, depth) {
             Visit::Candidate => out.candidates.push(path),
             // A directory cycle ends here, as in the measuring walk.
             Visit::Descend if meta.is_dir && dirs.insert((meta.dev, meta.ino)) => {
-                next.push((path, meta.blocks));
+                next.push((path, meta.blocks, (meta.dev, meta.ino)));
             }
             Visit::Descend | Visit::Skip => {}
         }
@@ -301,7 +305,7 @@ impl<'a> Walker<'a> {
             let mut next = Vec::new();
             for batch in level.chunks(LEVEL_BATCH) {
                 let listed = self.read_level(batch, root_meta.dev, excluded);
-                for ((dir, dir_blocks), listing) in batch.iter().zip(listed) {
+                for ((dir, dir_blocks, _), listing) in batch.iter().zip(listed) {
                     match listing {
                         Listing::Cancelled => {
                             out.cancelled = true;
@@ -333,7 +337,7 @@ impl<'a> Walker<'a> {
         path: PathBuf,
         meta: Metadata,
         dirs: &mut HashSet<(u64, u64)>,
-        next: &mut Vec<(PathBuf, u64)>,
+        next: &mut Vec<Queued>,
         out: &mut Measure,
     ) {
         if meta.is_dir {
@@ -341,7 +345,7 @@ impl<'a> Walker<'a> {
                 return;
             }
             // Blocks added in the merge, only if the listing succeeds.
-            next.push((path, meta.blocks));
+            next.push((path, meta.blocks, (meta.dev, meta.ino)));
         } else {
             if meta.nlink > 1 && !self.seen.insert((meta.dev, meta.ino)) {
                 return;
@@ -355,7 +359,7 @@ impl<'a> Walker<'a> {
     /// to `threads` workers. Results come back in `level` order.
     fn read_level(
         &self,
-        level: &[(PathBuf, u64)],
+        level: &[Queued],
         root_dev: u64,
         excluded: &BTreeSet<PathBuf>,
     ) -> Vec<Listing> {
@@ -363,7 +367,7 @@ impl<'a> Walker<'a> {
         if workers <= 1 {
             return level
                 .iter()
-                .map(|(d, _)| self.list(d, root_dev, excluded))
+                .map(|(d, _, id)| self.list(d, *id, root_dev, excluded))
                 .collect();
         }
         let next = AtomicUsize::new(0);
@@ -376,8 +380,10 @@ impl<'a> Walker<'a> {
                         let mut mine = Vec::new();
                         loop {
                             let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some((dir, _)) = level.get(i) else { break };
-                            mine.push((i, self.list(dir, root_dev, excluded)));
+                            let Some((dir, _, id)) = level.get(i) else {
+                                break;
+                            };
+                            mine.push((i, self.list(dir, *id, root_dev, excluded)));
                         }
                         mine
                     })
@@ -406,12 +412,23 @@ impl<'a> Walker<'a> {
 
     /// Reads one directory and admits each child, checking the cancel flag
     /// before every entry (FR-011: a huge directory must not delay the stop).
-    fn list(&self, dir: &Path, root_dev: u64, excluded: &BTreeSet<PathBuf>) -> Listing {
+    fn list(
+        &self,
+        dir: &Path,
+        admitted: (u64, u64),
+        root_dev: u64,
+        excluded: &BTreeSet<PathBuf>,
+    ) -> Listing {
         if self.is_cancelled() {
             return Listing::Cancelled;
         }
-        let mut entries = match self.fs.read_dir(dir) {
+        // #116: the directory is opened without following a symlink and must
+        // still be the one that was admitted. One that was swapped for a
+        // symlink (or replaced) after the check is not listed: the entry is no
+        // longer the directory that was admitted, which is what a symlink is.
+        let mut entries = match self.fs.read_dir_verified(dir, admitted) {
             Ok(c) => c,
+            Err(e) if is_swapped(&e) => return Listing::Failed(SkipReason::Symlink),
             Err(e) => return Listing::Failed(SkipReason::from(&e)),
         };
         // read_dir order is filesystem-defined; sort for a stable merge.
