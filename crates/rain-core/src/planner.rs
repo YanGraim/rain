@@ -2,8 +2,8 @@
 
 use crate::fs::Fs;
 use crate::model::{
-    ItemId, ProviderStatus, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason, Skipped, ToolItem,
-    ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
+    ItemId, ItemSource, ProviderStatus, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason,
+    Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
 };
 use crate::protect::ProtectList;
 use crate::rule::{EntryInfo, ProviderRule, RootedPath, Rule, RuleContext, RuleKind};
@@ -594,6 +594,14 @@ fn report(
                     .clone()
                     .fold(0u64, |acc, i| acc.saturating_add(i.allocated_bytes)),
                 items: (mine.count() + tools) as u64,
+                name_key: meta.name_key,
+                consequence_key: meta.consequence_key,
+                default_selected: meta.default_selected,
+                requires_app_closed: meta.requires_app_closed,
+                source: match r.kind() {
+                    RuleKind::Files(_) => ItemSource::Files,
+                    RuleKind::Provider(_) => ItemSource::Tool,
+                },
             }
         })
         .collect();
@@ -882,7 +890,7 @@ mod tests {
         let caches = rule("macos.user.caches", under(Root::Caches, ""));
         let report = run(&fs, &[&logs, &caches]);
 
-        assert_eq!(report.schema_version, 1);
+        assert_eq!(report.schema_version, 2);
         assert_eq!(
             items(&report),
             vec![

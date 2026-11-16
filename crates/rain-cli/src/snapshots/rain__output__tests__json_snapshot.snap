@@ -19,23 +19,34 @@ expression: render_json(&full_report()).unwrap()
       "rule": "sys.user-caches"
     }
   ],
+  "providers": [],
   "rules": [
     {
       "allocated_bytes": 1200004096,
       "category": "system-caches",
+      "consequence_key": "rule.sys.user-caches.consequence",
+      "default_selected": true,
       "id": "sys.user-caches",
       "items": 2,
-      "risk": "low"
+      "name_key": "rule.sys.user-caches",
+      "requires_app_closed": null,
+      "risk": "low",
+      "source": "fs"
     },
     {
       "allocated_bytes": 0,
       "category": "logs",
+      "consequence_key": "rule.sys.logs.consequence",
+      "default_selected": true,
       "id": "sys.logs",
       "items": 0,
-      "risk": "low"
+      "name_key": "rule.sys.logs",
+      "requires_app_closed": null,
+      "risk": "low",
+      "source": "fs"
     }
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "skipped": [
     {
       "path": "/Users/u/Library/Caches/a",
@@ -70,6 +81,8 @@ expression: render_json(&full_report()).unwrap()
       "reason": "io:other"
     }
   ],
+  "tool_items": [],
+  "tool_total_bytes": 0,
   "total_bytes": 1200004096,
   "unmanaged": []
 }

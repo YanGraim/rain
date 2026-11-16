@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 
 use rain_core::messages::{Catalog, MessageKey};
 use rain_core::model::{
-    Category, ItemId, Risk, RuleId, ScanReport, SkipReason, ToolStatus, Unavailable,
+    Category, ItemId, ItemSource, Risk, RuleId, ScanReport, SkipReason, ToolStatus, Unavailable,
 };
 use rain_core::rule::RuleKind;
 use rain_core::rules;
@@ -261,6 +261,11 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
                 "risk": risk_str(r.risk),
                 "allocated_bytes": r.allocated_bytes,
                 "items": r.items,
+                "name_key": r.name_key,
+                "consequence_key": r.consequence_key,
+                "default_selected": r.default_selected,
+                "requires_app_closed": r.requires_app_closed,
+                "source": source_str(r.source),
             })
         })
         .collect();
@@ -300,6 +305,33 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
             })
         })
         .collect();
+    // FR-021: what a tool reported, with its own figures and no file path; the
+    // bytes are the tool's, so they are in `tool_total_bytes` and never in
+    // `total_bytes`. The label is untrusted text; JSON escapes it.
+    let tool_items: Vec<Value> = report
+        .tool_items
+        .iter()
+        .map(|t| {
+            json!({
+                "id": item_id_str(t.id),
+                "rule": t.rule.as_str(),
+                "key": t.key,
+                "label": t.label,
+                "reported_bytes": t.reported_bytes,
+            })
+        })
+        .collect();
+    // FR-022: `ok`, or why the tool gave nothing.
+    let providers: Vec<Value> = report
+        .providers
+        .iter()
+        .map(|p| {
+            json!({
+                "rule": p.rule.as_str(),
+                "status": tool_status_str(p.status),
+            })
+        })
+        .collect();
     let doc = json!({
         "schema_version": report.schema_version,
         "rules": rules,
@@ -307,6 +339,9 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
         "skipped": skipped,
         "total_bytes": report.total_bytes,
         "unmanaged": unmanaged,
+        "tool_items": tool_items,
+        "tool_total_bytes": report.tool_total_bytes,
+        "providers": providers,
     });
     let mut out = serde_json::to_string_pretty(&doc)?;
     out.push('\n');
@@ -316,6 +351,30 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
 // Hex string: JSON consumers in JavaScript lose precision above 2^53.
 fn item_id_str(id: ItemId) -> String {
     format!("{:016x}", id.0)
+}
+
+fn source_str(s: ItemSource) -> &'static str {
+    match s {
+        ItemSource::Files => "fs",
+        ItemSource::Tool => "tool",
+    }
+}
+
+fn tool_status_str(s: ToolStatus) -> String {
+    match s {
+        ToolStatus::Ok => "ok".to_owned(),
+        ToolStatus::Unavailable(Unavailable::Failed) => "failed".to_owned(),
+        ToolStatus::Unavailable(Unavailable::Parse) => "parse".to_owned(),
+        ToolStatus::Unavailable(Unavailable::Tool(e)) => match e {
+            ToolError::NotInstalled => "not-installed".to_owned(),
+            ToolError::NotRunning => "not-running".to_owned(),
+            ToolError::Timeout => "timeout".to_owned(),
+            ToolError::Cancelled => "cancelled".to_owned(),
+            ToolError::OutputTooLarge => "output-too-large".to_owned(),
+            ToolError::Denied => "denied".to_owned(),
+            ToolError::Io(kind) => format!("io:{}", io_kind_str(kind)),
+        },
+    }
 }
 
 fn category_str(c: Category) -> &'static str {
@@ -387,8 +446,8 @@ mod tests {
     use super::*;
     use rain_core::messages::Locale;
     use rain_core::model::{
-        Category, ItemId, Risk, RuleId, RuleTotal, ScanItem, SkipReason, Skipped, Unmanaged,
-        SCHEMA_VERSION,
+        Category, ItemId, ItemSource, ProviderStatus, Risk, RuleId, RuleTotal, ScanItem,
+        SkipReason, Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
     };
     use std::io::ErrorKind;
     use std::path::PathBuf;
@@ -428,6 +487,11 @@ mod tests {
                     risk: Risk::Low,
                     allocated_bytes: 1_200_004_096,
                     items: 2,
+                    name_key: "rule.sys.user-caches",
+                    consequence_key: "rule.sys.user-caches.consequence",
+                    default_selected: true,
+                    requires_app_closed: None,
+                    source: ItemSource::Files,
                 },
                 RuleTotal {
                     rule: LOGS,
@@ -435,6 +499,11 @@ mod tests {
                     risk: Risk::Low,
                     allocated_bytes: 0,
                     items: 0,
+                    name_key: "rule.sys.logs",
+                    consequence_key: "rule.sys.logs.consequence",
+                    default_selected: true,
+                    requires_app_closed: None,
+                    source: ItemSource::Files,
                 },
             ],
             items,
@@ -736,12 +805,277 @@ mod tests {
         assert!(list[0].get("id").is_none());
         assert_eq!(list[0].as_object().unwrap().len(), 4);
         // Existing fields and version are untouched.
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], 2);
         assert_eq!(v["total_bytes"], 1_200_004_096u64);
         assert_eq!(
             json(&report(Vec::new()))["unmanaged"],
             serde_json::json!([])
         );
+    }
+
+    // --- #82: schema version 2 ------------------------------------------------
+
+    const DOCKER_DF: RuleId = RuleId::new("containers.build-cache");
+
+    /// File items, tool items (one with a hostile label), providers in several
+    /// states and unmanaged data: everything the v2 document carries.
+    fn v2_report() -> ScanReport {
+        let mut r = with_unmanaged();
+        r.rules.push(RuleTotal {
+            rule: DOCKER_DF,
+            category: Category::Containers,
+            risk: Risk::Medium,
+            allocated_bytes: 0,
+            items: 2,
+            name_key: "rule.containers.build-cache",
+            consequence_key: "rule.containers.build-cache.consequence",
+            default_selected: false,
+            requires_app_closed: Some("com.docker.docker"),
+            source: ItemSource::Tool,
+        });
+        let tool = |key: &str, label: &str, bytes: u64| ToolItem {
+            id: ItemId::of_key(DOCKER_DF, key),
+            rule: DOCKER_DF,
+            key: key.to_owned(),
+            label: label.to_owned(),
+            reported_bytes: bytes,
+            paths: vec![PathBuf::from("/Users/u/never/in/json")],
+        };
+        r.tool_items = vec![
+            tool("cache", "Build cache", 2_000_000_000),
+            tool("old", "img\x1b]52;c;x\x07\u{202e}", 5),
+        ];
+        r.tool_total_bytes = 2_000_000_005;
+        r.providers = vec![
+            ProviderStatus {
+                rule: DOCKER_DF,
+                status: ToolStatus::Ok,
+            },
+            ProviderStatus {
+                rule: RuleId::new("containers.volumes"),
+                status: ToolStatus::Unavailable(Unavailable::Tool(
+                    rain_core::tools::ToolError::Timeout,
+                )),
+            },
+            ProviderStatus {
+                rule: RuleId::new("containers.stopped"),
+                status: ToolStatus::Unavailable(Unavailable::Failed),
+            },
+            ProviderStatus {
+                rule: RuleId::new("containers.unused-images"),
+                status: ToolStatus::Unavailable(Unavailable::Parse),
+            },
+        ];
+        r
+    }
+
+    // FR-001, FR-004, FR-021: the document of the whole report, as the UI will
+    // read it. Reviewed by hand: new fields are additive.
+    #[test]
+    fn json_v2_snapshot() {
+        insta::assert_snapshot!(render_json(&v2_report()).unwrap());
+    }
+
+    #[test]
+    fn schema_version_is_2() {
+        assert_eq!(SCHEMA_VERSION, 2);
+        assert_eq!(json(&v2_report())["schema_version"], 2);
+    }
+
+    // FR-010: the same report gives exactly the same bytes.
+    #[test]
+    fn two_runs_identical_json_v2() {
+        assert_eq!(
+            render_json(&v2_report()).unwrap(),
+            render_json(&v2_report()).unwrap()
+        );
+    }
+
+    fn is_hex16(s: &str) -> bool {
+        s.len() == 16
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+
+    // Item ids, for files and for tools, are lower case hex of 16 digits (a
+    // `u64` is not safe in JavaScript).
+    #[test]
+    fn item_ids_are_hex16() {
+        let v = json(&v2_report());
+        for list in ["items", "tool_items"] {
+            let entries = v[list].as_array().unwrap();
+            assert!(!entries.is_empty(), "{list}");
+            for e in entries {
+                let id = e["id"].as_str().unwrap();
+                assert!(is_hex16(id), "{list}: {id}");
+            }
+        }
+    }
+
+    // FR-004: user data has no id, so there is nothing to select.
+    #[test]
+    fn unmanaged_has_no_id() {
+        let v = json(&v2_report());
+        let list = v["unmanaged"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        for e in list {
+            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys, ["allocated_bytes", "file_count", "key", "path"]);
+        }
+    }
+
+    // Every field of the v1 document is still there with the same type.
+    #[test]
+    fn v2_keeps_every_v1_field_with_the_same_type() {
+        use serde_json::Value;
+        let v = json(&v2_report());
+        let kind = |x: &Value| match x {
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Bool(_) => "bool",
+            Value::Null => "null",
+            Value::Object(_) => "object",
+        };
+        let top = [
+            ("schema_version", "number"),
+            ("rules", "array"),
+            ("items", "array"),
+            ("skipped", "array"),
+            ("total_bytes", "number"),
+            ("unmanaged", "array"),
+        ];
+        for (name, ty) in top {
+            assert_eq!(kind(&v[name]), ty, "top level {name}");
+        }
+        let nested: [(&str, &[(&str, &str)]); 4] = [
+            (
+                "rules",
+                &[
+                    ("id", "string"),
+                    ("category", "string"),
+                    ("risk", "string"),
+                    ("allocated_bytes", "number"),
+                    ("items", "number"),
+                ],
+            ),
+            (
+                "items",
+                &[
+                    ("id", "string"),
+                    ("rule", "string"),
+                    ("path", "string"),
+                    ("allocated_bytes", "number"),
+                    ("file_count", "number"),
+                ],
+            ),
+            ("skipped", &[("path", "string"), ("reason", "string")]),
+            (
+                "unmanaged",
+                &[
+                    ("key", "string"),
+                    ("path", "string"),
+                    ("allocated_bytes", "number"),
+                    ("file_count", "number"),
+                ],
+            ),
+        ];
+        for (list, fields) in nested {
+            for entry in v[list].as_array().unwrap() {
+                for (name, ty) in fields {
+                    assert_eq!(kind(&entry[*name]), *ty, "{list}[].{name}");
+                }
+            }
+        }
+    }
+
+    // FR-001, FR-002, FR-015: each rule says how to show it and what it needs.
+    #[test]
+    fn rules_carry_their_metadata() {
+        let v = json(&v2_report());
+        let rules = v["rules"].as_array().unwrap();
+        let by_id = |id: &str| rules.iter().find(|r| r["id"] == id).unwrap();
+        let caches = by_id("sys.user-caches");
+        assert_eq!(caches["name_key"], "rule.sys.user-caches");
+        assert_eq!(
+            caches["consequence_key"],
+            "rule.sys.user-caches.consequence"
+        );
+        assert_eq!(caches["default_selected"], true);
+        assert!(caches["requires_app_closed"].is_null());
+        assert_eq!(caches["source"], "fs");
+        let docker = by_id("containers.build-cache");
+        assert_eq!(docker["default_selected"], false);
+        assert_eq!(docker["requires_app_closed"], "com.docker.docker");
+        assert_eq!(docker["source"], "tool");
+    }
+
+    // FR-021, ADR 0004: tool items carry the tool's figures and no file path,
+    // and their bytes are in `tool_total_bytes`, never in `total_bytes`.
+    #[test]
+    fn tool_items_have_no_path_and_stay_out_of_total_bytes() {
+        let v = json(&v2_report());
+        let items = v["tool_items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        for e in items {
+            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys, ["id", "key", "label", "reported_bytes", "rule"]);
+        }
+        assert_eq!(items[0]["key"], "cache");
+        assert_eq!(items[0]["reported_bytes"], 2_000_000_000u64);
+        assert_eq!(v["tool_total_bytes"], 2_000_000_005u64);
+        assert_eq!(v["total_bytes"], 1_200_004_096u64);
+        let text = render_json(&v2_report()).unwrap();
+        assert!(!text.contains("never/in/json"), "{text}");
+    }
+
+    // FR-022: a provider is `ok` or the reason it was unavailable, spelled as
+    // the other enums (kebab-case).
+    #[test]
+    fn providers_use_kebab_case_statuses() {
+        use rain_core::tools::ToolError;
+        let mut r = v2_report();
+        r.providers = [
+            ToolStatus::Ok,
+            ToolStatus::Unavailable(Unavailable::Failed),
+            ToolStatus::Unavailable(Unavailable::Parse),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::NotInstalled)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::NotRunning)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::Timeout)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::Cancelled)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::OutputTooLarge)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::Denied)),
+            ToolStatus::Unavailable(Unavailable::Tool(ToolError::Io(ErrorKind::TimedOut))),
+        ]
+        .into_iter()
+        .map(|status| ProviderStatus {
+            rule: DOCKER_DF,
+            status,
+        })
+        .collect();
+        let v = json(&r);
+        let got: Vec<&str> = v["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["status"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "ok",
+                "failed",
+                "parse",
+                "not-installed",
+                "not-running",
+                "timeout",
+                "cancelled",
+                "output-too-large",
+                "denied",
+                "io:timed-out",
+            ]
+        );
+        assert!(v["providers"][0].as_object().unwrap().contains_key("rule"));
     }
 
     // FR-013: the skipped line uses the singular form for one item.
