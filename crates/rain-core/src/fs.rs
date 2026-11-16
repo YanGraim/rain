@@ -35,6 +35,11 @@ pub trait Fs: Send + Sync {
     fn symlink_metadata(&self, p: &Path) -> io::Result<Metadata>;
     fn read_dir(&self, p: &Path) -> io::Result<Vec<DirEntryInfo>>;
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf>;
+    /// Read-only and bounded: the whole content of a regular file as text.
+    /// Never follows a symlink for the file itself. A file that is not
+    /// regular, is longer than `max_bytes` (it is never cut), is not UTF-8,
+    /// or changed identity while being opened, is an error.
+    fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String>;
 }
 // FS-TRAIT-END
 
@@ -56,6 +61,54 @@ impl Fs for StdFs {
     fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
         std::fs::canonicalize(p)
     }
+
+    fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
+        read_regular_file(p, max_bytes)
+    }
+}
+
+fn invalid(why: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, why)
+}
+
+/// The identity is checked twice: `lstat` before opening (which refuses a
+/// symlink, a folder or a device without opening anything, so nothing can
+/// block) and `fstat` on what was opened, which must be the same file. A
+/// path swapped in between is therefore never read.
+#[cfg(unix)]
+fn read_regular_file(p: &Path, max_bytes: u64) -> io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+
+    let before = std::fs::symlink_metadata(p)?;
+    if !before.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    if before.len() > max_bytes {
+        return Err(invalid("file is longer than the limit"));
+    }
+    let file = std::fs::File::open(p)?;
+    let after = file.metadata()?;
+    if !after.file_type().is_file() || (after.dev(), after.ino()) != (before.dev(), before.ino()) {
+        return Err(invalid("file changed while it was opened"));
+    }
+    // One byte more than the limit tells a file that grew from one that fits.
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).map_or(true, |n| n > max_bytes) {
+        return Err(invalid("file is longer than the limit"));
+    }
+    String::from_utf8(bytes).map_err(|_| invalid("file is not UTF-8"))
+}
+
+// Without a real device and inode the identity check cannot be done.
+#[cfg(not(unix))]
+fn read_regular_file(_: &Path, _: u64) -> io::Result<String> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(unix)]
@@ -141,6 +194,9 @@ mod fake {
         entries: BTreeMap<PathBuf, Metadata>,
         symlinks: BTreeMap<PathBuf, PathBuf>,
         errors: BTreeMap<PathBuf, io::ErrorKind>,
+        contents: BTreeMap<PathBuf, Vec<u8>>,
+        /// Every path `read_to_string` was asked for, failed or not.
+        reads: std::sync::Mutex<Vec<PathBuf>>,
     }
 
     enum Node<'a> {
@@ -208,6 +264,24 @@ mod fake {
             self.entries.insert(path.clone(), link_meta());
             self.symlinks.insert(path, target.into());
             self
+        }
+
+        /// Registers a regular file with its metadata and content.
+        pub fn insert_file(
+            &mut self,
+            path: impl Into<PathBuf>,
+            meta: Metadata,
+            content: impl Into<Vec<u8>>,
+        ) -> &mut Self {
+            let path = path.into();
+            self.entries.insert(path.clone(), meta);
+            self.contents.insert(path, content.into());
+            self
+        }
+
+        /// The paths `read_to_string` was called with, in order.
+        pub fn read_log(&self) -> Vec<PathBuf> {
+            self.reads.lock().map(|r| r.clone()).unwrap_or_default()
         }
 
         /// Makes every access to `path` fail with `kind`.
@@ -376,6 +450,29 @@ mod fake {
         fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
             self.resolve_as(p, Realpath::HOST)
         }
+
+        fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
+            if let Ok(mut reads) = self.reads.lock() {
+                reads.push(p.to_path_buf());
+            }
+            let (real, meta) = self.locate(p)?;
+            // Like the real one: not through a symlink, only a regular file.
+            if meta.is_dir || meta.is_symlink || self.symlinks.contains_key(p) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "not a regular file",
+                ));
+            }
+            let bytes = self.contents.get(&real).ok_or(io::ErrorKind::NotFound)?;
+            if u64::try_from(bytes.len()).map_or(true, |n| n > max_bytes) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "file is longer than the limit",
+                ));
+            }
+            String::from_utf8(bytes.clone())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "file is not UTF-8"))
+        }
     }
 }
 
@@ -412,11 +509,21 @@ mod tests {
 
     // NFR-005: the trait exposes exactly the read-only allowlist. Adding any
     // method (write or otherwise) fails here and forces a security review.
+    // `read_to_string` was approved by the tech lead: read-only and bounded
+    // (regular file only, never through a symlink, never cut at the limit).
     #[test]
     fn fake_fs_has_no_write_api() {
         let mut methods = fs_trait_methods();
         methods.sort();
-        assert_eq!(methods, ["canonicalize", "read_dir", "symlink_metadata"]);
+        assert_eq!(
+            methods,
+            [
+                "canonicalize",
+                "read_dir",
+                "read_to_string",
+                "symlink_metadata"
+            ]
+        );
 
         // Exhaustive impl: if the trait gained a method, this would not compile.
         struct Probe;
@@ -428,6 +535,9 @@ mod tests {
                 Err(io::ErrorKind::Unsupported.into())
             }
             fn canonicalize(&self, _: &Path) -> io::Result<PathBuf> {
+                Err(io::ErrorKind::Unsupported.into())
+            }
+            fn read_to_string(&self, _: &Path, _: u64) -> io::Result<String> {
                 Err(io::ErrorKind::Unsupported.into())
             }
         }
@@ -762,6 +872,116 @@ mod real_fs_tests {
             }
             (r, f) => panic!("{what:?}: real {r:?}, fake {f:?}"),
         }
+    }
+
+    // `read_to_string`: the real filesystem reads a regular file within the
+    // limit, and refuses everything else with an error, never a cut.
+    #[cfg(unix)]
+    #[test]
+    fn std_read_to_string_reads_only_regular_files_within_the_limit() {
+        let (_tmp, base, _) = sandbox();
+        let file = base.join("extensions.json");
+        std::fs::write(&file, b"[1,2,3]").unwrap();
+        assert_eq!(StdFs.read_to_string(&file, 1024).unwrap(), "[1,2,3]");
+        // Exactly at the limit is fine; one byte over is an error.
+        assert_eq!(StdFs.read_to_string(&file, 7).unwrap(), "[1,2,3]");
+        assert_eq!(
+            StdFs.read_to_string(&file, 6).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        // A symlink to a readable file is refused, whatever it points at.
+        let link = base.join("link.json");
+        symlink(&file, &link).unwrap();
+        assert!(StdFs.read_to_string(&link, 1024).is_err());
+        // A dangling symlink, a folder and a missing file are errors too.
+        let dangling = base.join("dangling.json");
+        symlink(base.join("missing"), &dangling).unwrap();
+        assert!(StdFs.read_to_string(&dangling, 1024).is_err());
+        assert!(StdFs.read_to_string(&base, 1024).is_err());
+        assert_eq!(
+            StdFs
+                .read_to_string(&base.join("nope"), 1024)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        // Not UTF-8 is an error, not a lossy string.
+        let raw = base.join("raw.json");
+        std::fs::write(&raw, b"\xff\xfe").unwrap();
+        assert_eq!(
+            StdFs.read_to_string(&raw, 1024).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        // A symlinked parent is followed like lstat does, but the file
+        // itself must be regular: this one is.
+        let real = base.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("a.json"), b"{}").unwrap();
+        symlink(&real, base.join("via")).unwrap();
+        assert_eq!(
+            StdFs.read_to_string(&base.join("via/a.json"), 8).unwrap(),
+            "{}"
+        );
+    }
+
+    fn file_meta(is_dir: bool, ino: u64) -> Metadata {
+        Metadata {
+            is_dir,
+            is_symlink: false,
+            dev: 1,
+            ino,
+            nlink: if is_dir { 2 } else { 1 },
+            blocks: u64::from(!is_dir),
+            len: 0,
+            mtime: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    // The fake behaves like the real one, and records every read.
+    #[test]
+    fn fake_read_to_string_matches_the_real_rules_and_records_calls() {
+        let mut fake = FakeFs::new();
+        fake.insert("/d", file_meta(true, 10)).insert_file(
+            "/d/f.json",
+            file_meta(false, 11),
+            b"[1,2,3]".to_vec(),
+        );
+        assert_eq!(
+            fake.read_to_string(Path::new("/d/f.json"), 7).unwrap(),
+            "[1,2,3]"
+        );
+        assert_eq!(
+            fake.read_to_string(Path::new("/d/f.json"), 6)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(fake.read_to_string(Path::new("/d"), 100).is_err());
+        assert_eq!(
+            fake.read_to_string(Path::new("/d/none.json"), 100)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        fake.insert_symlink("/d/link.json", "/d/f.json");
+        assert!(fake.read_to_string(Path::new("/d/link.json"), 100).is_err());
+        fake.insert_file("/d/raw.json", file_meta(false, 12), vec![0xff, 0xfe]);
+        assert_eq!(
+            fake.read_to_string(Path::new("/d/raw.json"), 100)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        fake.fail_with("/d/denied.json", io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            fake.read_to_string(Path::new("/d/denied.json"), 100)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        // Every attempt is recorded, in order, failed or not.
+        assert_eq!(fake.read_log().len(), 7);
+        assert_eq!(fake.read_log()[0], PathBuf::from("/d/f.json"));
     }
 
     // FR-004, FR-007: a link escaping the root canonicalizes outside it on the

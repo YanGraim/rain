@@ -1105,6 +1105,8 @@ mod caches_tests {
     use crate::rule::RuleContext;
     use crate::rules;
     use rain_platform::Os;
+    #[cfg(unix)]
+    use std::ffi::OsStr;
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, SystemTime};
     use unicode_normalization::UnicodeNormalization;
@@ -1211,6 +1213,90 @@ mod caches_tests {
                 "{spelling} not skipped as protected"
             );
         }
+    }
+
+    /// `~/Library/Caches` with an ordinary cache and the given children; the
+    /// non-UTF-8 names are built from bytes.
+    #[cfg(unix)]
+    fn caches_with_raw_names(raw: &[&[u8]], inside_ok: &[&[u8]]) -> FakeFs {
+        use std::os::unix::ffi::OsStrExt;
+        let caches = Path::new(CACHES);
+        let mut fs = FakeFs::new();
+        fs.insert("/Users", meta(true, 100, 0))
+            .insert(HOME, meta(true, 101, 0))
+            .insert("/Users/Tester/Library", meta(true, 102, 0))
+            .insert(CACHES, meta(true, 103, 0))
+            .insert(caches.join("free"), meta(false, 300, 4))
+            .insert(caches.join("ok"), meta(true, 310, 0))
+            .insert(caches.join("ok/x"), meta(false, 311, 8));
+        for (i, name) in raw.iter().enumerate() {
+            fs.insert(
+                caches.join(OsStr::from_bytes(name)),
+                meta(false, 400 + i as u64, 64),
+            );
+        }
+        for (i, name) in inside_ok.iter().enumerate() {
+            fs.insert(
+                caches.join("ok").join(OsStr::from_bytes(name)),
+                meta(false, 500 + i as u64, 64),
+            );
+        }
+        fs
+    }
+
+    // #119, NFR-005: a child of a rule root whose name is not UTF-8 cannot be
+    // compared with the protection list, so it fails closed: it is reported as
+    // protected, never offered, and its ordinary siblings are not affected.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_child_of_a_rule_root_is_reported_as_protected() {
+        use std::os::unix::ffi::OsStrExt;
+        let raw: &[&[u8]] = &[b"\xff", b"bad\xfe\xfdname", b"\xc3("];
+        let fs = caches_with_raw_names(raw, &[]);
+        let report = scan_caches(&fs, Path::new(HOME));
+        let caches = Path::new(CACHES);
+        for name in raw {
+            let path = caches.join(OsStr::from_bytes(name));
+            assert!(
+                report
+                    .skipped
+                    .iter()
+                    .any(|s| s.path == path && s.reason == SkipReason::Protected),
+                "{name:?} not reported as protected: {:?}",
+                report.skipped
+            );
+            assert!(
+                report.items.iter().all(|i| i.path != path),
+                "{name:?} offered"
+            );
+        }
+        let offered: Vec<&Path> = report.items.iter().map(|i| i.path.as_path()).collect();
+        assert_eq!(
+            offered,
+            vec![caches.join("free").as_path(), caches.join("ok").as_path()]
+        );
+        assert_eq!(report.total_bytes, (4 + 8) * 512);
+    }
+
+    // #119: a non-UTF-8 name inside a candidate makes the whole candidate
+    // refused (it could hold something the list would have protected).
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_name_inside_a_candidate_refuses_the_candidate() {
+        let fs = caches_with_raw_names(&[], &[b"inner\xff"]);
+        let report = scan_caches(&fs, Path::new(HOME));
+        let caches = Path::new(CACHES);
+        let offered: Vec<&Path> = report.items.iter().map(|i| i.path.as_path()).collect();
+        assert_eq!(offered, vec![caches.join("free").as_path()]);
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.path == caches.join("ok") && s.reason == SkipReason::Protected),
+            "{:?}",
+            report.skipped
+        );
+        assert_eq!(report.total_bytes, 4 * 512);
     }
 
     // FR-043
