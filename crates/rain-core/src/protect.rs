@@ -1772,6 +1772,23 @@ mod engines_tests {
         }
     }
 
+    // #60: what a developer tool keeps next to its caches and that is not
+    // cache: the Cargo binaries, configuration and credentials, and the Maven
+    // settings (which can hold server passwords).
+    #[test]
+    fn developer_tool_binaries_configuration_and_credentials_are_protected() {
+        for rel in [
+            ".cargo/bin",
+            ".cargo/config",
+            ".cargo/config.toml",
+            ".cargo/credentials",
+            ".cargo/credentials.toml",
+            ".m2/settings.xml",
+        ] {
+            assert_engine_protected(rel);
+        }
+    }
+
     /// The state files of the Cursor and VS Code global storage that the
     /// protection list names, by file name. The audit below ties this table
     /// to `protected.list` in both directions.
