@@ -286,7 +286,7 @@ mod tests {
         let others = builtin()
             .iter()
             // FR-015: the Cursor and Windsurf rules are covered in
-            // `tests/rules_ai_cursor.rs` and `tests/rules_ai_tools.rs`; the Xcode ones in `tests/rules_apple.rs`.
+            // `tests/rules_ai_cursor.rs` and `tests/rules_ai_tools.rs`; the Xcode ones in `tests/rules_apple.rs`; the browsers in `rules/browser.rs`.
             .filter(|r| {
                 !matches!(
                     r.meta().id.as_str(),
@@ -298,6 +298,8 @@ mod tests {
                         | "ai.vscode.old-extensions"
                         | "ai.cursor.old-extensions"
                         | "ai.windsurf.cache"
+                        | "browser.chrome"
+                        | "browser.brave"
                         | "apple.archives"
                         | "apple.device-support"
                         | "apple.previews"
@@ -450,6 +452,8 @@ mod tests {
                 "apple.device-support",
                 "apple.previews",
                 "apple.derived-data",
+                "browser.chrome",
+                "browser.brave",
                 "sys.sensitive-caches",
                 "sys.crash-reports",
                 "sys.logs",
