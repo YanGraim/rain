@@ -8,6 +8,7 @@
   "table.header.path": "Path",
   "table.header.size": "Size",
   "table.total": "Total",
+  "table.size-unknown": "size unknown",
   "table.skipped": {
     "one": "{count} item skipped",
     "other": "{count} items skipped"
@@ -176,5 +177,6 @@
   "provider.unavailable.denied": "{tool} could not be run safely",
   "provider.unavailable.parse": "{tool} returned output Rain could not read",
   "provider.unavailable.io": "{tool} could not be run",
-  "provider.unavailable.failed": "{tool} reported an error (is it running?)"
+  "provider.unavailable.failed": "{tool} reported an error (is it running?)",
+  "provider.unavailable.simctl": "simctl is not available (the full Xcode is needed, not only the Command Line Tools)"
 }

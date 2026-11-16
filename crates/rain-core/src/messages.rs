@@ -71,6 +71,7 @@ pub enum MessageKey {
     TableHeaderPath,
     TableHeaderSize,
     TableTotal,
+    TableSizeUnknown,
     TableSkipped,
     RuleHomebrewCache,
     RuleXcodeDerivedData,
@@ -107,6 +108,7 @@ pub enum MessageKey {
     ProviderUnavailableParse,
     ProviderUnavailableIo,
     ProviderUnavailableFailed,
+    ProviderUnavailableSimctl,
 }
 
 impl MessageKey {
@@ -120,6 +122,7 @@ impl MessageKey {
         MessageKey::TableHeaderPath,
         MessageKey::TableHeaderSize,
         MessageKey::TableTotal,
+        MessageKey::TableSizeUnknown,
         MessageKey::TableSkipped,
         MessageKey::RuleHomebrewCache,
         MessageKey::RuleXcodeDerivedData,
@@ -156,6 +159,7 @@ impl MessageKey {
         MessageKey::ProviderUnavailableParse,
         MessageKey::ProviderUnavailableIo,
         MessageKey::ProviderUnavailableFailed,
+        MessageKey::ProviderUnavailableSimctl,
     ];
 
     /// Key as written in the locale file.
@@ -170,6 +174,7 @@ impl MessageKey {
             MessageKey::TableHeaderPath => "table.header.path",
             MessageKey::TableHeaderSize => "table.header.size",
             MessageKey::TableTotal => "table.total",
+            MessageKey::TableSizeUnknown => "table.size-unknown",
             MessageKey::TableSkipped => "table.skipped",
             MessageKey::RuleHomebrewCache => "rule.pkg.homebrew",
             MessageKey::RuleXcodeDerivedData => "rule.apple.derived-data",
@@ -208,6 +213,7 @@ impl MessageKey {
             MessageKey::ProviderUnavailableParse => "provider.unavailable.parse",
             MessageKey::ProviderUnavailableIo => "provider.unavailable.io",
             MessageKey::ProviderUnavailableFailed => "provider.unavailable.failed",
+            MessageKey::ProviderUnavailableSimctl => "provider.unavailable.simctl",
         }
     }
 }
