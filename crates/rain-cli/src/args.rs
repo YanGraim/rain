@@ -19,6 +19,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Scan(ScanArgs),
+    Clean(CleanArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
@@ -36,6 +37,38 @@ pub struct ScanArgs {
     pub json: bool,
 }
 
+/// `rain clean`. For now only `--dry-run` exists: it is required, so no way
+/// of running this command moves or deletes anything (ADR 0006).
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct CleanArgs {
+    #[arg(long = "rule", value_name = "ID")]
+    pub rules: Vec<String>,
+    #[arg(long = "path", value_name = "DIR")]
+    pub paths: Vec<PathBuf>,
+    #[arg(long, value_name = "DAYS", default_value_t = DEFAULT_MIN_AGE_DAYS)]
+    pub min_age_days: u32,
+    #[arg(long)]
+    pub json: bool,
+    /// Required until the executor exists.
+    #[arg(long = "dry-run", required = true)]
+    pub dry_run: bool,
+    /// Item ids (as in the JSON report); none means the preselected rules.
+    #[arg(long = "item", value_name = "ID")]
+    pub items: Vec<String>,
+}
+
+impl CleanArgs {
+    /// The scan the plan is made from.
+    pub fn scan_args(&self) -> ScanArgs {
+        ScanArgs {
+            rules: self.rules.clone(),
+            paths: self.paths.clone(),
+            min_age_days: self.min_age_days,
+            json: self.json,
+        }
+    }
+}
+
 /// Help texts come from the catalog (FR-013), never from the source.
 fn command(catalog: &Catalog) -> clap::Command {
     let text = |key| catalog.get(key).to_owned();
@@ -47,6 +80,16 @@ fn command(catalog: &Catalog) -> clap::Command {
                 .mut_arg("paths", |a| a.help(text(MessageKey::HelpPath)))
                 .mut_arg("min_age_days", |a| a.help(text(MessageKey::HelpMinAgeDays)))
                 .mut_arg("json", |a| a.help(text(MessageKey::HelpJson)))
+        })
+        .mut_subcommand("clean", |clean| {
+            clean
+                .about(text(MessageKey::HelpClean))
+                .mut_arg("rules", |a| a.help(text(MessageKey::HelpRule)))
+                .mut_arg("paths", |a| a.help(text(MessageKey::HelpPath)))
+                .mut_arg("min_age_days", |a| a.help(text(MessageKey::HelpMinAgeDays)))
+                .mut_arg("json", |a| a.help(text(MessageKey::HelpJson)))
+                .mut_arg("dry_run", |a| a.help(text(MessageKey::HelpDryRun)))
+                .mut_arg("items", |a| a.help(text(MessageKey::HelpItem)))
         })
 }
 
@@ -138,8 +181,17 @@ mod tests {
         full.extend_from_slice(argv);
         match parse(&en(), full).unwrap().command {
             Some(Command::Scan(args)) => args,
-            None => panic!("no subcommand"),
+            _ => panic!("not a scan"),
         }
+    }
+
+    fn clean_args(argv: &[&str]) -> Result<CleanArgs, clap::Error> {
+        let mut full = vec!["rain", "clean"];
+        full.extend_from_slice(argv);
+        parse(&en(), full).map(|cli| match cli.command {
+            Some(Command::Clean(args)) => args,
+            _ => panic!("not a clean"),
+        })
     }
 
     fn meta(is_dir: bool, ino: u64) -> Metadata {
@@ -205,6 +257,64 @@ mod tests {
         }
         let err = parse(&en(), ["rain", "scan", "--nope"]).unwrap_err();
         assert_eq!(err.exit_code(), 2);
+    }
+
+    // ADR 0006: until the executor exists, `rain clean` cannot run without
+    // `--dry-run`: there is no way of moving or deleting anything.
+    #[test]
+    fn clean_cannot_run_without_dry_run() {
+        for argv in [
+            &[][..],
+            &["--json"],
+            &["--item", "00000000000000ff"],
+            &["--rule", "sys.logs"],
+        ] {
+            let err = clean_args(argv).unwrap_err();
+            assert_eq!(err.exit_code(), 2, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn clean_parses_the_scan_options_and_item_ids() {
+        let args = clean_args(&[
+            "--dry-run",
+            "--rule",
+            "sys.logs",
+            "--path",
+            "/a",
+            "--min-age-days",
+            "7",
+            "--json",
+            "--item",
+            "00000000000000ff",
+            "--item",
+            "0000000000000100",
+        ])
+        .unwrap();
+        assert!(args.dry_run && args.json);
+        assert_eq!(args.items, ["00000000000000ff", "0000000000000100"]);
+        let scan = args.scan_args();
+        assert_eq!(scan.rules, ["sys.logs"]);
+        assert_eq!(scan.paths, [PathBuf::from("/a")]);
+        assert_eq!(scan.min_age_days, 7);
+        let defaults = clean_args(&["--dry-run"]).unwrap();
+        assert!(defaults.items.is_empty() && defaults.rules.is_empty());
+        assert_eq!(defaults.min_age_days, 30);
+    }
+
+    #[test]
+    fn clean_help_uses_catalog_texts() {
+        let catalog = en();
+        let err = parse(&catalog, ["rain", "clean", "--help"]).unwrap_err();
+        let help = err.to_string();
+        for key in [
+            MessageKey::HelpClean,
+            MessageKey::HelpDryRun,
+            MessageKey::HelpItem,
+            MessageKey::HelpRule,
+        ] {
+            assert!(help.contains(catalog.get(key)), "{key:?} missing: {help}");
+        }
     }
 
     // FR-013: help texts come from the catalog.

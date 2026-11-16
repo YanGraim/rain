@@ -178,5 +178,36 @@
   "provider.unavailable.parse": "{tool} devolveu uma saída que o Rain não conseguiu ler",
   "provider.unavailable.io": "Não foi possível executar o {tool}",
   "provider.unavailable.failed": "{tool} informou um erro (está em execução?)",
-  "provider.unavailable.simctl": "simctl não está disponível (é preciso o Xcode completo, não só as Command Line Tools)"
+  "provider.unavailable.simctl": "simctl não está disponível (é preciso o Xcode completo, não só as Command Line Tools)",
+  "help.clean": "Mostra o que iria para a Lixeira (nada é alterado)",
+  "help.dry-run": "Só mostra o plano: nada é movido nem apagado (obrigatório por enquanto)",
+  "help.item": "Só este id de item, como no relatório JSON (repetível; padrão: todos os itens das regras pré-selecionadas)",
+  "clean.nothing": "Nada para limpar: nenhum item foi selecionado.",
+  "clean.summary": {
+    "one": "{count} item, {size}",
+    "other": "{count} itens, {size}"
+  },
+  "clean.plan": "Plano {hash}, válido por {minutes} minutos",
+  "clean.needs-confirmation": {
+    "one": "{count} item precisa da sua confirmação antes de poder ser limpo",
+    "other": "{count} itens precisam da sua confirmação antes de poderem ser limpos"
+  },
+  "clean.needs-app-closed": {
+    "one": "{count} item precisa que o app dele esteja fechado; o Rain ainda não consegue verificar isso, então seria pulado",
+    "other": "{count} itens precisam que o app deles esteja fechado; o Rain ainda não consegue verificar isso, então seriam pulados"
+  },
+  "clean.dry-run-note": "Simulação: nada foi movido nem apagado.",
+  "error.invalid-item": "'{item}' não é um id de item (16 dígitos hexadecimais, como no relatório JSON)",
+  "clean.error.unknown-item": "O item {id} não está na análise: rode-a de novo",
+  "clean.error.tool-item": "O item {id} vem de uma ferramenta (Docker, Ollama, simuladores): ainda não dá para limpá-los",
+  "clean.error.excluded": "O item {id} contém um item de outra regra, então não é limpo inteiro: escolha o item de dentro",
+  "clean.error.protected": "O item {id} é, ou contém, dados protegidos e nunca é limpo",
+  "clean.error.trash": "O item {id} é a Lixeira, a contém ou está dentro dela e nunca é limpo",
+  "clean.error.non-utf8": "O item {id} tem um nome que o Rain não consegue registrar com segurança (não é UTF-8 válido)",
+  "clean.error.gone": "O item {id} não existe mais: rode a análise de novo",
+  "clean.error.symlink": "O item {id} agora é um link: rode a análise de novo",
+  "clean.error.outside-home": "O item {id} não está dentro da sua pasta pessoal",
+  "clean.error.unreadable": "Não foi possível ler o item {id}",
+  "clean.error.clock": "O relógio do sistema está antes de 1970",
+  "clean.error.other": "Não foi possível montar o plano: {reason}"
 }

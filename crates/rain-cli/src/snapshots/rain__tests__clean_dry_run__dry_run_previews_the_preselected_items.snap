@@ -1,0 +1,11 @@
+---
+source: crates/rain-cli/src/main.rs
+expression: out
+---
+Rule             Path                             Size
+sys.logs         /Users/t/Library/Logs/old.log  1.0 kB
+sys.user-caches  /Users/t/Library/Caches/app    4.1 kB
+Total                                           5.1 kB
+2 items, 5.1 kB
+Plan eb37c67a4a034e7b, valid for 15 minutes
+Dry run: nothing was moved or deleted.

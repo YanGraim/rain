@@ -77,6 +77,10 @@
 ~/.cargo/credentials.toml
 ~/.m2/settings.xml
 
+# The Trash: what was already moved out of the way, never an item (and the
+# executor must not move anything into itself).
+~/.Trash
+
 # Container engines: VM disks and data, cleaned only by the engine itself.
 # Docker's group container is already covered by ~/Library/Group Containers.
 ~/Library/Containers/com.docker.docker
