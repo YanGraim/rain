@@ -891,6 +891,9 @@ mod tests {
         fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
             self.0.canonicalize(p)
         }
+        fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
+            self.0.read_to_string(p, max_bytes)
+        }
     }
 
     /// Wide and deep tree with hardlinks spread across far-apart
@@ -1062,6 +1065,9 @@ mod tests {
         fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
             self.0.canonicalize(p)
         }
+        fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
+            self.0.read_to_string(p, max_bytes)
+        }
     }
 
     // FR-011: a worker panic is a bug and propagates; it is never reported
@@ -1146,6 +1152,9 @@ mod tests {
         }
         fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
             self.0.canonicalize(p)
+        }
+        fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
+            self.0.read_to_string(p, max_bytes)
         }
     }
 
