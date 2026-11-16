@@ -13,6 +13,13 @@ thiserror = "2"
 rain-platform = { path = "../rain-platform" }
 unicode-normalization = "0.1"
 
+[target.'cfg(unix)'.dependencies]
+# Opens a directory by file descriptor without following a symlink and lists it
+# from that descriptor (the walker): safe wrappers, no `unsafe` on our side.
+# Already in the tree through rain-platform; only the `fs` and `std` features
+# are added (`std` brings `Dir`, paths and the standard descriptor types).
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+
 [dev-dependencies]
 rain-core = { path = ".", features = ["testing"] }
 proptest = "1"

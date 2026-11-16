@@ -40,8 +40,43 @@ pub trait Fs: Send + Sync {
     /// regular, is longer than `max_bytes` (it is never cut), is not UTF-8,
     /// or changed identity while being opened, is an error.
     fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String>;
+    /// Read-only: the entries of directory `p`, which must still be the one
+    /// that was admitted, with identity `expected` (`(dev, ino)`). A symlink in
+    /// its place, or another directory, is an error that [`is_swapped`]
+    /// recognises. The real filesystem opens it without following a symlink
+    /// and lists from what it opened, so nothing can change between the check
+    /// and the listing; this default only checks first and then lists.
+    fn read_dir_verified(&self, p: &Path, expected: (u64, u64)) -> io::Result<Vec<DirEntryInfo>> {
+        let m = self.symlink_metadata(p)?;
+        if m.is_symlink || (m.dev, m.ino) != expected {
+            return Err(swapped());
+        }
+        self.read_dir(p)
+    }
 }
 // FS-TRAIT-END
+
+/// The directory is no longer the one that was admitted.
+#[derive(Debug)]
+struct Swapped;
+
+impl std::fmt::Display for Swapped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("directory was replaced after it was admitted")
+    }
+}
+
+impl std::error::Error for Swapped {}
+
+fn swapped() -> io::Error {
+    io::Error::other(Swapped)
+}
+
+/// True for the error [`Fs::read_dir_verified`] gives when the directory was
+/// replaced by a symlink or by another directory.
+pub fn is_swapped(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|inner| inner.is::<Swapped>())
+}
 
 /// The real filesystem, read-only.
 #[derive(Debug, Default, Clone, Copy)]
@@ -65,6 +100,57 @@ impl Fs for StdFs {
     fn read_to_string(&self, p: &Path, max_bytes: u64) -> io::Result<String> {
         read_regular_file(p, max_bytes)
     }
+
+    fn read_dir_verified(&self, p: &Path, expected: (u64, u64)) -> io::Result<Vec<DirEntryInfo>> {
+        list_verified(p, expected)
+    }
+}
+
+/// Opens `p` as a directory without following a symlink (`O_NOFOLLOW`,
+/// `O_DIRECTORY`; `O_NONBLOCK` so nothing swapped in can block the open),
+/// checks the identity of what was opened and lists from that descriptor.
+#[cfg(unix)]
+fn list_verified(p: &Path, expected: (u64, u64)) -> io::Result<Vec<DirEntryInfo>> {
+    use rustix::fs::{openat, Dir, Mode, OFlags, CWD};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    let flags =
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let os_err = |e: rustix::io::Errno| io::Error::from_raw_os_error(e.raw_os_error());
+    let fd = match openat(CWD, p, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(e) => {
+            // A symlink as the last component is refused with a different
+            // errno on each system; ask what it is instead of guessing.
+            let link = std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+            return Err(if link { swapped() } else { os_err(e) });
+        }
+    };
+    let dir = std::fs::File::from(fd);
+    let opened = dir.metadata()?;
+    if (opened.dev(), opened.ino()) != expected {
+        return Err(swapped());
+    }
+    let mut reader = Dir::read_from(&dir).map_err(os_err)?;
+    let mut entries = Vec::new();
+    while let Some(entry) = reader.read() {
+        let entry = entry.map_err(os_err)?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            entries.push(DirEntryInfo {
+                path: p.join(OsStr::from_bytes(name)),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+// Without a real device and inode there is no identity to check.
+#[cfg(not(unix))]
+fn list_verified(_: &Path, _: (u64, u64)) -> io::Result<Vec<DirEntryInfo>> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 fn invalid(why: &'static str) -> io::Error {
@@ -511,6 +597,8 @@ mod tests {
     // method (write or otherwise) fails here and forces a security review.
     // `read_to_string` was approved by the tech lead: read-only and bounded
     // (regular file only, never through a symlink, never cut at the limit).
+    // So was `read_dir_verified`: read-only, it lists a directory opened
+    // without following a symlink, after checking its identity.
     #[test]
     fn fake_fs_has_no_write_api() {
         let mut methods = fs_trait_methods();
@@ -520,6 +608,7 @@ mod tests {
             [
                 "canonicalize",
                 "read_dir",
+                "read_dir_verified",
                 "read_to_string",
                 "symlink_metadata"
             ]
@@ -538,6 +627,9 @@ mod tests {
                 Err(io::ErrorKind::Unsupported.into())
             }
             fn read_to_string(&self, _: &Path, _: u64) -> io::Result<String> {
+                Err(io::ErrorKind::Unsupported.into())
+            }
+            fn read_dir_verified(&self, _: &Path, _: (u64, u64)) -> io::Result<Vec<DirEntryInfo>> {
                 Err(io::ErrorKind::Unsupported.into())
             }
         }
@@ -922,6 +1014,104 @@ mod real_fs_tests {
             StdFs.read_to_string(&base.join("via/a.json"), 8).unwrap(),
             "{}"
         );
+    }
+
+    fn names(entries: Vec<DirEntryInfo>) -> Vec<String> {
+        let mut out: Vec<String> = entries
+            .iter()
+            .filter_map(|e| e.path.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn identity(p: &Path) -> (u64, u64) {
+        let m = StdFs.symlink_metadata(p).unwrap();
+        (m.dev, m.ino)
+    }
+
+    // #116: the directory is opened without following a symlink and listed
+    // from what was opened, which must be the directory that was admitted.
+    #[cfg(unix)]
+    #[test]
+    fn std_read_dir_verified_lists_the_admitted_directory() {
+        let (_tmp, base, _) = sandbox();
+        let dir = base.join("d");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a"), b"x").unwrap();
+        std::fs::write(dir.join(".hidden"), b"x").unwrap();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let listed = StdFs.read_dir_verified(&dir, identity(&dir)).unwrap();
+        // The paths are the ones callers join, not a descriptor path.
+        assert!(listed.iter().all(|e| e.path.starts_with(&dir)));
+        assert_eq!(names(listed.clone()), [".hidden", "a", "sub"]);
+        // Same answer as the plain listing.
+        assert_eq!(names(listed), names(StdFs.read_dir(&dir).unwrap()));
+    }
+
+    // #116: a folder swapped for a symlink after it was admitted is refused,
+    // even when the link points at the very same directory; so is a folder
+    // replaced by another one, and anything that is not a directory.
+    #[cfg(unix)]
+    #[test]
+    fn std_read_dir_verified_refuses_a_swapped_directory() {
+        let (_tmp, base, _) = sandbox();
+        let dir = base.join("d");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a"), b"x").unwrap();
+        let admitted = identity(&dir);
+
+        // A symlink in its place, to another folder with other files.
+        let other = base.join("other");
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(other.join("secret"), b"x").unwrap();
+        std::fs::rename(&dir, base.join("d.moved")).unwrap();
+        symlink(&other, &dir).unwrap();
+        let err = StdFs.read_dir_verified(&dir, admitted).unwrap_err();
+        assert!(is_swapped(&err), "{err:?}");
+
+        // A symlink to the directory that was admitted: still a symlink.
+        std::fs::remove_file(&dir).unwrap();
+        symlink(base.join("d.moved"), &dir).unwrap();
+        let err = StdFs.read_dir_verified(&dir, admitted).unwrap_err();
+        assert!(is_swapped(&err), "{err:?}");
+
+        // A different real directory at the same path.
+        std::fs::remove_file(&dir).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        let err = StdFs.read_dir_verified(&dir, admitted).unwrap_err();
+        assert!(is_swapped(&err), "{err:?}");
+
+        // A file and a missing path are plain errors, not "swapped".
+        let file = base.join("f");
+        std::fs::write(&file, b"x").unwrap();
+        let err = StdFs.read_dir_verified(&file, identity(&file)).unwrap_err();
+        assert!(!is_swapped(&err), "{err:?}");
+        let gone = StdFs
+            .read_dir_verified(&base.join("nope"), (0, 0))
+            .unwrap_err();
+        assert_eq!(gone.kind(), io::ErrorKind::NotFound);
+        assert!(!is_swapped(&gone));
+    }
+
+    // The default implementation (used by the in-memory filesystem and by
+    // test wrappers) applies the same rules over `symlink_metadata`.
+    #[test]
+    fn default_read_dir_verified_checks_symlink_and_identity() {
+        let mut fake = FakeFs::new();
+        fake.insert("/d", file_meta(true, 10))
+            .insert("/d/a", file_meta(false, 11))
+            .insert_symlink("/l", "/d");
+        let ok = fake.read_dir_verified(Path::new("/d"), (1, 10)).unwrap();
+        assert_eq!(names(ok), ["a"]);
+        let swapped = fake
+            .read_dir_verified(Path::new("/d"), (1, 99))
+            .unwrap_err();
+        assert!(is_swapped(&swapped));
+        let link = fake
+            .read_dir_verified(Path::new("/l"), (1, 10))
+            .unwrap_err();
+        assert!(is_swapped(&link));
     }
 
     fn file_meta(is_dir: bool, ino: u64) -> Metadata {
