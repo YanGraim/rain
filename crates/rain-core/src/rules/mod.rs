@@ -459,6 +459,8 @@ mod tests {
                 "sys.logs",
                 "sys.user-caches",
                 "proj.rust-target",
+                "proj.venv",
+                "proj.build-dist",
                 "proj.node-modules",
             ]
         );

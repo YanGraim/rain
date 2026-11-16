@@ -17,9 +17,15 @@ use std::time::{Duration, SystemTime};
 const HOME: &str = "/Users/Tester";
 
 /// Rules that walk the home for named artifact folders (`node_modules`,
-/// `target`). They only offer those folders, and they must prune
-/// `~/.claude` (hidden folders are never entered).
-const HOME_WALKERS: &[&str] = &["proj.node-modules", "proj.rust-target"];
+/// `target`, `.venv`, `dist`). They only offer those folders, and they must
+/// prune `~/.claude` (hidden folders other than their own name are never
+/// entered).
+const HOME_WALKERS: &[&str] = &[
+    "proj.node-modules",
+    "proj.rust-target",
+    "proj.venv",
+    "proj.build-dist",
+];
 
 struct HomeAt;
 
