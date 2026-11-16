@@ -17,14 +17,57 @@ pub static RUST_TARGET: ProjectArtifact = ProjectArtifact {
         requires_app_closed: None,
         os: &[Os::Macos],
     },
-    dir_name: "target",
-    marker: "Cargo.toml",
+    dir_names: &["target"],
+    marker: Some("Cargo.toml"),
+    inner_marker: None,
     // FR-016: takes `--min-age-days` (30 by default).
     min_age_days: None,
     age_walk_budget: 200_000,
 };
 
-pub(super) static RULES: &[&dyn Rule] = &[&RUST_TARGET];
+/// `proj.venv`: a `.venv` or `venv` (the names the Python docs call
+/// conventional) that holds a regular `pyvenv.cfg`, the file `python -m venv`
+/// places in the environment. Without it the folder is not an environment.
+pub static VENV: ProjectArtifact = ProjectArtifact {
+    meta: RuleMeta {
+        id: RuleId::new("proj.venv"),
+        category: Category::Projects,
+        risk: Risk::Medium,
+        name_key: "rule.proj.venv",
+        consequence_key: "rule.proj.venv.consequence",
+        default_selected: false,
+        requires_app_closed: None,
+        os: &[Os::Macos],
+    },
+    dir_names: &[".venv", "venv"],
+    marker: None,
+    inner_marker: Some("pyvenv.cfg"),
+    min_age_days: None,
+    age_walk_budget: 200_000,
+};
+
+/// `proj.build-dist`: a `dist/` (Vite's default output folder) beside a
+/// regular `package.json`. Other build folders (`build`, `.next`, `.turbo`)
+/// wait for a source.
+pub static BUILD_DIST: ProjectArtifact = ProjectArtifact {
+    meta: RuleMeta {
+        id: RuleId::new("proj.build-dist"),
+        category: Category::Projects,
+        risk: Risk::Medium,
+        name_key: "rule.proj.build-dist",
+        consequence_key: "rule.proj.build-dist.consequence",
+        default_selected: false,
+        requires_app_closed: None,
+        os: &[Os::Macos],
+    },
+    dir_names: &["dist"],
+    marker: Some("package.json"),
+    inner_marker: None,
+    min_age_days: None,
+    age_walk_budget: 200_000,
+};
+
+pub(super) static RULES: &[&dyn Rule] = &[&RUST_TARGET, &VENV, &BUILD_DIST];
 
 #[cfg(test)]
 mod tests {
@@ -126,6 +169,232 @@ mod tests {
         assert!(RULES
             .iter()
             .any(|r| r.meta().id.as_str() == "proj.rust-target"));
+    }
+
+    mod venv_dist {
+        use super::super::{BUILD_DIST, RULES, VENV};
+        use super::{now, DAY};
+        use crate::fs::{FakeFs, Metadata};
+        use crate::model::Risk;
+        use crate::planner::{scan, ResolvedRoots, ScanContext};
+        use crate::protect::ProtectList;
+        use crate::rule::{Rule, RuleContext};
+        use rain_platform::{Os, Platform, PlatformError, Root};
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+
+        const HOME: &str = "/Users/Tester";
+
+        struct HomeAt;
+
+        impl Platform for HomeAt {
+            fn resolve(&self, _: Root) -> Result<PathBuf, PlatformError> {
+                Ok(PathBuf::from(HOME))
+            }
+            fn is_root_user(&self) -> bool {
+                false
+            }
+            fn os(&self) -> Os {
+                Os::Macos
+            }
+        }
+
+        /// `d` folder, `f` file, `l` symlink; the age is in days.
+        fn load(lines: &[(&str, u64, &str)]) -> FakeFs {
+            let md = |kind: &str, ino: u64, days: u64| Metadata {
+                is_dir: kind == "d",
+                is_symlink: kind == "l",
+                dev: 1,
+                ino,
+                nlink: if kind == "d" { 2 } else { 1 },
+                blocks: u64::from(kind == "f") * 8,
+                len: 0,
+                mtime: now() - Duration::from_secs(days * DAY),
+            };
+            let mut fs = FakeFs::new();
+            fs.insert("/Users", md("d", 1, 900))
+                .insert(HOME, md("d", 2, 900));
+            for (n, (kind, days, rel)) in lines.iter().enumerate() {
+                fs.insert(Path::new(HOME).join(rel), md(kind, 10 + n as u64, *days));
+            }
+            fs
+        }
+
+        fn listed(fs: &FakeFs, rule: &'static dyn Rule) -> Vec<String> {
+            let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(fs);
+            let roots = ResolvedRoots {
+                home: PathBuf::from(HOME),
+                caches: Path::new(HOME).join("Library/Caches"),
+                logs: Path::new(HOME).join("Library/Logs"),
+            };
+            let ctx = ScanContext {
+                fs,
+                protect: &protect,
+                roots: &roots,
+                rule_ctx: RuleContext {
+                    min_age_days: 30,
+                    user_paths: Vec::new(),
+                    now: now(),
+                },
+                tools: &crate::tools::NoTools,
+                threads: Some(1),
+            };
+            let report = scan(&[rule], &ctx, &AtomicBool::new(false)).unwrap();
+            let mut out: Vec<String> = report
+                .items
+                .iter()
+                .filter_map(|i| i.path.strip_prefix(HOME).ok()?.to_str().map(str::to_owned))
+                .collect();
+            out.sort();
+            out
+        }
+
+        fn dist_project(marker: bool, days: u64) -> FakeFs {
+            let mut lines = vec![
+                ("d", days, "p"),
+                ("d", 0, "p/dist"),
+                ("f", 0, "p/dist/index.js"),
+                ("f", days, "p/src.ts"),
+            ];
+            if marker {
+                lines.push(("f", days, "p/package.json"));
+            }
+            load(&lines)
+        }
+
+        // FR-016
+        #[test]
+        fn dist_without_package_json_ignored() {
+            assert!(listed(&dist_project(false, 90), &BUILD_DIST).is_empty());
+        }
+
+        // FR-016
+        #[test]
+        fn dist_of_an_inactive_js_project_listed_and_recent_one_ignored() {
+            assert_eq!(listed(&dist_project(true, 90), &BUILD_DIST), ["p/dist"]);
+            assert!(listed(&dist_project(true, 5), &BUILD_DIST).is_empty());
+        }
+
+        // Every npm package has a `package.json` and many a `dist/`: the
+        // dependencies of a project are never projects of their own.
+        #[test]
+        fn dist_inside_node_modules_is_not_listed() {
+            let fs = load(&[
+                ("d", 90, "p"),
+                ("d", 0, "p/node_modules"),
+                ("d", 400, "p/node_modules/lib"),
+                ("f", 400, "p/node_modules/lib/package.json"),
+                ("d", 400, "p/node_modules/lib/dist"),
+                ("d", 90, "q"),
+                ("f", 90, "q/package.json"),
+                ("d", 0, "q/dist"),
+            ]);
+            assert_eq!(listed(&fs, &BUILD_DIST), ["q/dist"]);
+        }
+
+        // Only `dist` is named: other build folders have no source yet.
+        #[test]
+        fn build_dist_lists_only_dist() {
+            let fs = load(&[
+                ("d", 90, "p"),
+                ("f", 90, "p/package.json"),
+                ("d", 90, "p/dist"),
+                ("d", 90, "p/build"),
+                ("d", 90, "p/.next"),
+                ("d", 90, "p/.turbo"),
+                ("d", 90, "p/out"),
+            ]);
+            assert_eq!(listed(&fs, &BUILD_DIST), ["p/dist"]);
+        }
+
+        // FR-014, FR-016
+        #[test]
+        fn venv_is_medium() {
+            for rule in [&VENV as &dyn Rule, &BUILD_DIST] {
+                let m = rule.meta();
+                assert_eq!(m.risk, Risk::Medium, "{}", m.id.as_str());
+                assert!(!m.default_selected, "{}", m.id.as_str());
+                assert_eq!(m.os, &[Os::Macos]);
+            }
+            for id in ["proj.venv", "proj.build-dist"] {
+                assert!(RULES.iter().any(|r| r.meta().id.as_str() == id), "{id}");
+            }
+        }
+
+        // FR-016: a `.venv` or `venv` that holds a regular `pyvenv.cfg`.
+        #[test]
+        fn venv_of_an_inactive_project_listed_by_either_name() {
+            for name in [".venv", "venv"] {
+                let fs = load(&[
+                    ("d", 90, "p"),
+                    ("f", 90, "p/app.py"),
+                    ("d", 0, &format!("p/{name}")),
+                    ("f", 0, &format!("p/{name}/pyvenv.cfg")),
+                    ("d", 0, &format!("p/{name}/lib")),
+                ]);
+                assert_eq!(listed(&fs, &VENV), [format!("p/{name}")], "{name}");
+            }
+        }
+
+        #[test]
+        fn venv_needs_a_regular_pyvenv_cfg() {
+            for cfg in [None, Some("d"), Some("l")] {
+                let mut lines = vec![
+                    ("d", 90, "p"),
+                    ("f", 90, "p/app.py"),
+                    ("d", 0, "p/venv"),
+                    ("f", 0, "p/venv/bin-python"),
+                ];
+                if let Some(kind) = cfg {
+                    lines.push((kind, 0, "p/venv/pyvenv.cfg"));
+                }
+                assert!(listed(&load(&lines), &VENV).is_empty(), "{cfg:?}");
+            }
+        }
+
+        #[test]
+        fn recent_project_venv_ignored() {
+            let fs = load(&[
+                ("d", 5, "p"),
+                ("f", 5, "p/app.py"),
+                ("d", 0, "p/.venv"),
+                ("f", 0, "p/.venv/pyvenv.cfg"),
+            ]);
+            assert!(listed(&fs, &VENV).is_empty());
+        }
+
+        // Hidden folders are tool internals: only the artifact name itself is
+        // let through, and a venv inside a venv is part of the outer one.
+        #[test]
+        fn hidden_folders_are_not_entered_and_nested_venvs_not_listed() {
+            let fs = load(&[
+                ("d", 900, ".cache"),
+                ("d", 90, ".cache/p"),
+                ("d", 0, ".cache/p/.venv"),
+                ("f", 0, ".cache/p/.venv/pyvenv.cfg"),
+                ("d", 90, "p"),
+                ("d", 0, "p/.venv"),
+                ("f", 0, "p/.venv/pyvenv.cfg"),
+                ("d", 0, "p/.venv/inner"),
+                ("d", 0, "p/.venv/inner/venv"),
+                ("f", 0, "p/.venv/inner/venv/pyvenv.cfg"),
+            ]);
+            assert_eq!(listed(&fs, &VENV), ["p/.venv"]);
+        }
+
+        // FR-004: a project is active while any file outside the artifact is
+        // recent, e.g. a notebook beside the venv.
+        #[test]
+        fn recent_file_beside_the_venv_keeps_the_project_active() {
+            let fs = load(&[
+                ("d", 90, "p"),
+                ("f", 2, "p/notes.ipynb"),
+                ("d", 0, "p/.venv"),
+                ("f", 0, "p/.venv/pyvenv.cfg"),
+            ]);
+            assert!(listed(&fs, &VENV).is_empty());
+        }
     }
 
     mod fixture {

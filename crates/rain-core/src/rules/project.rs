@@ -1,6 +1,7 @@
-//! A build or dependency folder of an inactive project: the artifact named
-//! `dir_name` beside a regular `marker` file, when nothing else in the
-//! project changed for the inactivity age.
+//! A build or dependency folder of an inactive project: an artifact named
+//! in `dir_names`, beside a regular `marker` file when the rule has one and
+//! holding a regular `inner_marker` file when the rule has one, when nothing
+//! else in the project changed for the inactivity age.
 
 use crate::fs::Fs;
 use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
@@ -12,8 +13,13 @@ use std::time::{Duration, SystemTime};
 #[derive(Debug, Clone)]
 pub struct ProjectArtifact {
     pub meta: RuleMeta,
-    pub dir_name: &'static str,
-    pub marker: &'static str,
+    /// Folder names of the artifact (`.venv` and `venv`, for example).
+    pub dir_names: &'static [&'static str],
+    /// A regular file beside the artifact that makes the folder a project.
+    pub marker: Option<&'static str>,
+    /// A regular file inside the artifact that makes it the artifact: a
+    /// folder named `venv` is a virtual environment only with `pyvenv.cfg`.
+    pub inner_marker: Option<&'static str>,
     /// FR-009: `None` takes `--min-age-days` from the context.
     pub min_age_days: Option<u32>,
     pub age_walk_budget: usize,
@@ -53,23 +59,28 @@ impl FileRule for ProjectArtifact {
             let inside = entry
                 .path
                 .components()
-                .any(|c| c.as_os_str() == self.dir_name);
+                .any(|c| self.is_named(c.as_os_str().as_encoded_bytes()));
             return if inside { Visit::Skip } else { Visit::Descend };
         }
         let Some(name) = entry.path.file_name() else {
             return Visit::Skip;
         };
-        if never_entered(name.as_encoded_bytes()) {
+        let artifact = self.is_named(name.as_encoded_bytes());
+        // A hidden artifact name (`.venv`) is let through; every other hidden
+        // folder is a tool's own.
+        if !artifact && never_entered(name.as_encoded_bytes()) {
             return Visit::Skip;
         }
-        if name != self.dir_name {
+        if !artifact {
             return Visit::Descend;
         }
         // Never descend into an artifact: nested ones are already inside
         // the size of the outer one.
         match entry.path.parent() {
             Some(project)
-                if self.has_marker(fs, project) && self.is_inactive(entry, project, ctx, fs) =>
+                if self.has_marker(fs, project)
+                    && self.has_inner_marker(fs, entry.path)
+                    && self.is_inactive(entry, project, ctx, fs) =>
             {
                 Visit::Candidate
             }
@@ -79,10 +90,20 @@ impl FileRule for ProjectArtifact {
 }
 
 impl ProjectArtifact {
+    fn is_named(&self, name: &[u8]) -> bool {
+        self.dir_names.iter().any(|n| n.as_bytes() == name)
+    }
+
     /// A regular marker beside the artifact (not a link, not a folder).
     fn has_marker(&self, fs: &dyn Fs, project: &Path) -> bool {
-        fs.symlink_metadata(&project.join(self.marker))
-            .is_ok_and(|m| !m.is_dir && !m.is_symlink)
+        self.marker
+            .is_none_or(|marker| is_regular(fs, &project.join(marker)))
+    }
+
+    /// A regular marker inside the artifact (not a link, not a folder).
+    fn has_inner_marker(&self, fs: &dyn Fs, artifact: &Path) -> bool {
+        self.inner_marker
+            .is_none_or(|marker| is_regular(fs, &artifact.join(marker)))
     }
 
     /// No entry of the project outside its artifacts was modified within
@@ -99,7 +120,7 @@ impl ProjectArtifact {
         fs: &dyn Fs,
     ) -> bool {
         let Age::Newest(newest) =
-            newest_mtime(entry, project, fs, self.dir_name, self.age_walk_budget)
+            newest_mtime(entry, project, fs, self.dir_names, self.age_walk_budget)
         else {
             return false;
         };
@@ -111,10 +132,20 @@ impl ProjectArtifact {
     }
 }
 
-/// Hidden folders, `Library` and app bundles hold tool and app internals,
-/// whose artifacts are not projects of the user.
+fn is_regular(fs: &dyn Fs, path: &Path) -> bool {
+    fs.symlink_metadata(path)
+        .is_ok_and(|m| !m.is_dir && !m.is_symlink)
+}
+
+/// Hidden folders, `Library`, app bundles and `node_modules` hold tool, app
+/// and dependency internals, whose artifacts are not projects of the user
+/// (every npm package has a `package.json` and often a `dist/`). A rule whose
+/// own artifact is one of these names still reaches it.
 fn never_entered(name: &[u8]) -> bool {
-    name.starts_with(b".") || name == b"Library" || name.ends_with(b".app")
+    name.starts_with(b".")
+        || name == b"Library"
+        || name == b"node_modules"
+        || name.ends_with(b".app")
 }
 
 /// Outcome of the age check.
@@ -126,7 +157,7 @@ pub(super) enum Age {
     Cancelled,
 }
 
-/// Newest mtime in `project`, outside every folder named `dir_name` (their
+/// Newest mtime in `project`, outside every folder named in `dir_names` (their
 /// content is generated, not project activity). Never follows symlinks
 /// (FR-005), never leaves the volume (FR-006) and never enters a protected
 /// folder (FR-007); meeting a protected folder, a read error or more than
@@ -136,7 +167,7 @@ pub(super) fn newest_mtime(
     entry: &EntryInfo,
     project: &Path,
     fs: &dyn Fs,
-    dir_name: &str,
+    dir_names: &[&str],
     budget: usize,
 ) -> Age {
     let dev = entry.meta.dev;
@@ -154,7 +185,11 @@ pub(super) fn newest_mtime(
             return Age::Unknown;
         };
         for child in children {
-            if child.path.file_name().is_some_and(|n| n == dir_name) {
+            if child
+                .path
+                .file_name()
+                .is_some_and(|n| dir_names.iter().any(|d| n == *d))
+            {
                 continue;
             }
             read += 1;
@@ -216,8 +251,9 @@ mod tests {
             requires_app_closed: None,
             os: &[Os::Macos],
         },
-        dir_name: "target",
-        marker: "Cargo.toml",
+        dir_names: &["target"],
+        marker: Some("Cargo.toml"),
+        inner_marker: None,
         min_age_days: Some(90),
         age_walk_budget: 1_000,
     };
