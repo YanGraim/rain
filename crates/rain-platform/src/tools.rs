@@ -420,6 +420,23 @@ mod tests {
         );
     }
 
+    // A tool can behave differently by the path it was started through (the
+    // Ollama CLI starts its app when it runs as a link to it): a candidate
+    // that is a link runs as its canonical target, never as the link.
+    #[test]
+    fn a_symlinked_candidate_runs_as_its_canonical_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real");
+        std::fs::create_dir(&real_dir).unwrap();
+        let real = script(&real_dir, "tool", "echo $0", 0o700);
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let canonical = std::fs::canonicalize(&real).unwrap();
+        assert_eq!(resolve(&[link.clone()]), Some(canonical.clone()));
+        let out = go(&req(link, &[], Duration::from_secs(5))).unwrap();
+        assert_eq!(out.stdout.trim_end(), canonical.to_str().unwrap());
+    }
+
     #[test]
     fn timeout_kills_child() {
         let start = Instant::now();
