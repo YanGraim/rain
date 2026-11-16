@@ -223,10 +223,34 @@ fn dangling_alone_counts_in_total() {
 }
 
 // If `system df` fails, unused-images reports nothing: dangling bytes count.
+// The failure injected here is an exit code 1, not a timeout: a timeout now
+// spends the time budget of the whole tool (#142), see the test below. This
+// test used a timeout before that change.
 #[test]
 fn dangling_counts_when_system_df_fails() {
-    let report = run(&fake(FakeReply::Error(ToolError::Timeout), ok(DANGLING)));
+    let failed = FakeReply::Output(ToolOutput {
+        status: ExitStatusKind::Code(1),
+        stdout: String::new(),
+        stderr_len: 0,
+    });
+    let report = run(&fake(failed, ok(DANGLING)));
     assert_eq!(report.tool_total_bytes, 1_250_000_000);
+}
+
+// #142: after `system df` times out the other docker probes do not run: a
+// hung docker costs one wait, not one per rule. Every rule gets the same
+// reason, nothing is counted, and docker is called once.
+#[test]
+fn dangling_does_not_run_after_a_docker_timeout() {
+    let tools = fake(FakeReply::Error(ToolError::Timeout), ok(DANGLING));
+    let report = run(&tools);
+    assert_eq!(
+        statuses(&report),
+        [ToolStatus::Unavailable(Unavailable::Tool(ToolError::Timeout)); 5]
+    );
+    assert!(report.tool_items.is_empty());
+    assert_eq!(report.tool_total_bytes, 0);
+    assert_eq!(tools.calls(), vec![(ToolId::Docker, DF_ARGS.to_vec())]);
 }
 
 // FR-022: `docker system df` takes several seconds on real machines; the
