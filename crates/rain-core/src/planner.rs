@@ -7,7 +7,7 @@ use crate::model::{
 };
 use crate::protect::ProtectList;
 use crate::rule::{EntryInfo, ProviderRule, RootedPath, Rule, RuleContext, RuleKind};
-use crate::tools::{ExitStatusKind, ProviderItem, ToolError, ToolRunner};
+use crate::tools::{ExitStatusKind, ProviderItem, ToolError, ToolId, ToolOutput, ToolRunner};
 use crate::walk::Walker;
 use rain_platform::Root;
 use std::collections::{BTreeMap, BTreeSet};
@@ -403,6 +403,11 @@ fn probe_all<'r>(
     blocked: &BTreeSet<RuleId>,
 ) -> Result<Vec<Probe<'r>>, ScanError> {
     let mut probes = Vec::new();
+    // #142: what this scan has already asked, by tool and argv, and the
+    // tools that spent their time budget. Both die with the scan.
+    let mut asked: BTreeMap<(ToolId, Vec<&'static str>), Result<ToolOutput, ToolError>> =
+        BTreeMap::new();
+    let mut timed_out: BTreeSet<ToolId> = BTreeSet::new();
     for &rule in rules {
         let RuleKind::Provider(provider) = rule.kind() else {
             continue;
@@ -414,7 +419,30 @@ fn probe_all<'r>(
         if cancel.load(Ordering::SeqCst) {
             return Err(ScanError::Cancelled);
         }
-        let result = match tools.run(&provider.probe(), cancel) {
+        let call = provider.probe();
+        // The key is the tool and the argv; a probe names no item and keeps
+        // the default time limit (`ToolCall::read`), so nothing else can differ.
+        debug_assert!(call.item_args.is_empty(), "a probe names no item");
+        let key = (call.tool, call.args.to_vec());
+        let answer = match asked.get(&key) {
+            // Identical probes run once; failure and timeout are answers too.
+            Some(answer) => answer.clone(),
+            // One time budget per tool: after a timeout the other probes of
+            // that tool do not run and are unavailable for the same reason.
+            None if timed_out.contains(&call.tool) => Err(ToolError::Timeout),
+            None => {
+                let answer = tools.run(&call, cancel);
+                if matches!(answer, Err(ToolError::Cancelled)) {
+                    return Err(ScanError::Cancelled);
+                }
+                if matches!(answer, Err(ToolError::Timeout)) {
+                    timed_out.insert(call.tool);
+                }
+                answer
+            }
+        };
+        asked.insert(key, answer.clone());
+        let result = match answer {
             Err(ToolError::Cancelled) => return Err(ScanError::Cancelled),
             Err(e) => Err(Unavailable::Tool(e)),
             Ok(out) if out.status != ExitStatusKind::Success => Err(Unavailable::Failed),
@@ -1790,6 +1818,7 @@ mod tests {
         struct TestProvider {
             meta: RuleMeta,
             tool: ToolId,
+            args: &'static [&'static str],
             roots: Vec<RootedPath>,
         }
 
@@ -1804,7 +1833,7 @@ mod tests {
 
         impl ProviderRule for TestProvider {
             fn probe(&self) -> ToolCall {
-                ToolCall::read(self.tool, DF)
+                ToolCall::read(self.tool, self.args)
             }
             fn parse(&self, out: &ToolOutput) -> Result<Vec<ProviderItem>, ParseError> {
                 out.stdout
@@ -1837,6 +1866,7 @@ mod tests {
             TestProvider {
                 meta: rule(id, Vec::new()).meta,
                 tool,
+                args: DF,
                 roots: under(Root::Caches, "Homebrew"),
             }
         }
@@ -2062,6 +2092,210 @@ mod tests {
 
         fn user_root(path: &str) -> RootedPath {
             RootedPath::User(PathBuf::from(path))
+        }
+
+        const INFO: &[&str] = &["system", "info"];
+
+        fn docker(id: &'static str, args: &'static [&'static str]) -> TestProvider {
+            let mut p = provider(id, ToolId::Docker);
+            p.args = args;
+            p
+        }
+
+        /// Five rules asking the same question of the same tool.
+        fn five() -> [TestProvider; 5] {
+            [
+                docker("containers.a", DF),
+                docker("containers.b", DF),
+                docker("containers.c", DF),
+                docker("containers.d", DF),
+                docker("containers.e", DF),
+            ]
+        }
+
+        fn refs(rules: &[TestProvider]) -> Vec<&dyn Rule> {
+            rules.iter().map(|r| r as &dyn Rule).collect()
+        }
+
+        fn fail() -> FakeReply {
+            FakeReply::Output(ToolOutput {
+                status: ExitStatusKind::Code(1),
+                stdout: String::new(),
+                stderr_len: 0,
+            })
+        }
+
+        // #142: probes that are identical (same tool, same argv) run once
+        // per scan, and every rule gets the answer.
+        #[test]
+        fn identical_probes_run_once_and_every_rule_gets_the_answer() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, ok("k 10"));
+            let report = scan_with(&base(), &refs(&rules), &tools);
+            assert_eq!(tools.calls(), vec![(ToolId::Docker, DF.to_vec())]);
+            assert_eq!(report.tool_items.len(), 5);
+            assert!(report.providers.iter().all(|p| p.status == ToolStatus::Ok));
+            assert_eq!(report.providers.len(), 5);
+        }
+
+        // #142: a failure is not retried either, and all rules share it.
+        #[test]
+        fn a_failed_probe_is_tried_once_and_shared() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, fail());
+            let report = scan_with(&base(), &refs(&rules), &tools);
+            assert_eq!(tools.calls().len(), 1);
+            assert_eq!(report.providers.len(), 5);
+            assert!(report
+                .providers
+                .iter()
+                .all(|p| p.status == ToolStatus::Unavailable(Unavailable::Failed)));
+        }
+
+        // #142: neither is a timeout; every rule gets the same reason.
+        #[test]
+        fn a_timed_out_probe_is_tried_once_and_shared() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, FakeReply::Error(ToolError::Timeout));
+            let report = scan_with(&base(), &refs(&rules), &tools);
+            assert_eq!(tools.calls().len(), 1);
+            assert_eq!(report.providers.len(), 5);
+            assert!(report
+                .providers
+                .iter()
+                .all(|p| p.status == unavailable(ToolError::Timeout)));
+        }
+
+        // #142: two scans do not share anything: no state outlives a scan.
+        #[test]
+        fn two_scans_do_not_share_the_cache() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, ok("k 10"));
+            scan_with(&base(), &refs(&rules), &tools);
+            scan_with(&base(), &refs(&rules), &tools);
+            assert_eq!(tools.calls().len(), 2);
+        }
+
+        // #142: another argv is another probe, each with its own answer.
+        #[test]
+        fn different_argv_do_not_collide() {
+            let rules = [docker("containers.a", DF), docker("containers.b", INFO)];
+            let mut tools = FakeToolRunner::new();
+            tools
+                .reply(ToolId::Docker, DF, ok("df 1"))
+                .reply(ToolId::Docker, INFO, ok("info 2"));
+            let report = scan_with(&base(), &refs(&rules), &tools);
+            let mut calls = tools.calls();
+            calls.sort();
+            assert_eq!(
+                calls,
+                vec![
+                    (ToolId::Docker, DF.to_vec()),
+                    (ToolId::Docker, INFO.to_vec())
+                ]
+            );
+            assert_eq!(
+                keys(&report),
+                vec![
+                    ("containers.a", "df".to_owned(), 1),
+                    ("containers.b", "info".to_owned(), 2),
+                ]
+            );
+        }
+
+        // #142: one time budget per tool: after a timeout the other probes of
+        // that tool do not even run and are unavailable for the same reason;
+        // another tool is not affected.
+        #[test]
+        fn a_timeout_spends_the_budget_of_the_whole_tool() {
+            let first = docker("containers.a", DF);
+            let second = docker("containers.b", INFO);
+            let other = provider("pkg.homebrew", ToolId::Brew);
+            let mut tools = FakeToolRunner::new();
+            tools
+                .reply(ToolId::Docker, DF, FakeReply::Error(ToolError::Timeout))
+                .reply(ToolId::Docker, INFO, ok("info 2"))
+                .reply(ToolId::Brew, DF, ok("b 3"));
+            let report = scan_with(&base(), &[&first as &dyn Rule, &second, &other], &tools);
+            assert_eq!(
+                tools.calls(),
+                vec![(ToolId::Docker, DF.to_vec()), (ToolId::Brew, DF.to_vec())]
+            );
+            assert_eq!(
+                status(&report),
+                vec![
+                    ("containers.a", unavailable(ToolError::Timeout)),
+                    ("containers.b", unavailable(ToolError::Timeout)),
+                    ("pkg.homebrew", ToolStatus::Ok),
+                ]
+            );
+        }
+
+        // #142: a tool that is not running or not installed is not a timeout:
+        // a probe with another argv still runs, so "docker is stopped" is never
+        // reported as "docker timed out".
+        #[test]
+        fn a_stopped_or_missing_tool_does_not_spend_the_budget() {
+            for error in [
+                ToolError::NotRunning,
+                ToolError::NotInstalled,
+                ToolError::Denied,
+            ] {
+                let first = docker("containers.a", DF);
+                let second = docker("containers.b", INFO);
+                let mut tools = FakeToolRunner::new();
+                tools
+                    .reply(ToolId::Docker, DF, FakeReply::Error(error))
+                    .reply(ToolId::Docker, INFO, ok("info 2"));
+                let report = scan_with(&base(), &[&first as &dyn Rule, &second], &tools);
+                assert_eq!(tools.calls().len(), 2, "{error:?}");
+                assert_eq!(
+                    status(&report),
+                    vec![
+                        ("containers.a", unavailable(error)),
+                        ("containers.b", ToolStatus::Ok),
+                    ],
+                    "{error:?}"
+                );
+            }
+        }
+
+        // #142: a cancelled probe ends the scan and is asked once: it is not
+        // answered again to the other rules, nor kept as an answer.
+        #[test]
+        fn a_cancelled_probe_ends_the_scan_after_one_call() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, FakeReply::Error(ToolError::Cancelled));
+            let result = run_full(
+                &base(),
+                &refs(&rules),
+                &AtomicBool::new(false),
+                Some(1),
+                &tools,
+            );
+            assert!(matches!(result, Err(ScanError::Cancelled)));
+            assert_eq!(tools.calls().len(), 1);
+        }
+
+        // #142: only a timeout spends the budget; a plain failure of one
+        // question does not stop the others.
+        #[test]
+        fn a_failure_other_than_timeout_does_not_spend_the_budget() {
+            let first = docker("containers.a", DF);
+            let second = docker("containers.b", INFO);
+            let mut tools = FakeToolRunner::new();
+            tools
+                .reply(ToolId::Docker, DF, fail())
+                .reply(ToolId::Docker, INFO, ok("info 2"));
+            let report = scan_with(&base(), &[&first as &dyn Rule, &second], &tools);
+            assert_eq!(tools.calls().len(), 2);
+            assert_eq!(
+                status(&report),
+                vec![
+                    ("containers.a", ToolStatus::Unavailable(Unavailable::Failed)),
+                    ("containers.b", ToolStatus::Ok),
+                ]
+            );
         }
 
         // #161: a provider whose only roots are user roots in ~/.claude is
