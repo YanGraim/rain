@@ -111,7 +111,7 @@
   "rule.pkg.conda": "Conda package cache",
   "rule.pkg.conda.consequence": "Packages will be downloaded again when you create or update environments.",
   "rule.pkg.rustup": "Old Rust toolchains",
-  "rule.pkg.rustup.consequence": "Projects pinned to that toolchain will download it again.",
+  "rule.pkg.rustup.consequence": "Toolchains pinned by a project (rust-toolchain) are downloaded again on the next build (about {size}).",
   "rule.pkg.go-build": "Go build cache",
   "rule.pkg.go-build.consequence": "The next Go builds will be slower.",
   "rule.pkg.go-mod": "Go module cache",

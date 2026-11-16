@@ -111,7 +111,7 @@
   "rule.pkg.conda": "Cache de pacotes do Conda",
   "rule.pkg.conda.consequence": "Os pacotes serão baixados de novo quando você criar ou atualizar ambientes.",
   "rule.pkg.rustup": "Toolchains antigas do Rust",
-  "rule.pkg.rustup.consequence": "Projetos fixados nessa toolchain vão baixá-la de novo.",
+  "rule.pkg.rustup.consequence": "Toolchains fixadas por um projeto (rust-toolchain) são baixadas de novo no próximo build (cerca de {size}).",
   "rule.pkg.go-build": "Cache de build do Go",
   "rule.pkg.go-build.consequence": "Os próximos builds do Go serão mais lentos.",
   "rule.pkg.go-mod": "Cache de módulos do Go",
