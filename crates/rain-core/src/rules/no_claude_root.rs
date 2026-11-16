@@ -25,6 +25,7 @@ const HOME_WALKERS: &[&str] = &[
     "proj.rust-target",
     "proj.venv",
     "proj.build-dist",
+    "ai.aider.tags-cache",
 ];
 
 struct HomeAt;

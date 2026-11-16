@@ -461,6 +461,7 @@ mod tests {
                 "proj.rust-target",
                 "proj.venv",
                 "proj.build-dist",
+                "ai.aider.tags-cache",
                 "proj.node-modules",
             ]
         );
