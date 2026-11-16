@@ -163,6 +163,28 @@ fn invalid(why: &'static str) -> io::Error {
 /// path swapped in between is therefore never read.
 #[cfg(unix)]
 fn read_regular_file(p: &Path, max_bytes: u64) -> io::Result<String> {
+    read_regular_file_with(p, max_bytes, || {})
+}
+
+/// Opens `p` for reading only, without following a symlink and without
+/// blocking: `O_NOFOLLOW` refuses a symlink swapped in after the check, and
+/// `O_NONBLOCK` keeps a FIFO swapped in from blocking the open (the open of a
+/// FIFO succeeds at once and the identity check below refuses it). Not
+/// `OpenOptions`: that stays banned because it can open for writing.
+#[cfg(unix)]
+fn open_read_nofollow(p: &Path) -> io::Result<std::fs::File> {
+    use rustix::fs::{openat, Mode, OFlags, CWD};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let fd = openat(CWD, p, flags, Mode::empty())
+        .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
+    Ok(std::fs::File::from(fd))
+}
+
+/// `between` runs after the check and before the open: nothing in production
+/// (see [`read_regular_file`]); tests swap the path there to make the race
+/// deterministic.
+#[cfg(unix)]
+fn read_regular_file_with(p: &Path, max_bytes: u64, between: impl FnOnce()) -> io::Result<String> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
 
@@ -176,7 +198,8 @@ fn read_regular_file(p: &Path, max_bytes: u64) -> io::Result<String> {
     if before.len() > max_bytes {
         return Err(invalid("file is longer than the limit"));
     }
-    let file = std::fs::File::open(p)?;
+    between();
+    let file = open_read_nofollow(p)?;
     let after = file.metadata()?;
     if !after.file_type().is_file() || (after.dev(), after.ino()) != (before.dev(), before.ino()) {
         return Err(invalid("file changed while it was opened"));
@@ -1112,6 +1135,100 @@ mod real_fs_tests {
             .read_dir_verified(Path::new("/l"), (1, 10))
             .unwrap_err();
         assert!(is_swapped(&link));
+    }
+
+    /// `read_regular_file_with` in a thread, so a blocked open fails the test
+    /// instead of hanging it.
+    #[cfg(unix)]
+    fn read_within(p: PathBuf, between: impl FnOnce() + Send + 'static) -> io::Result<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_regular_file_with(&p, 1024, between));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the read blocked: the open must not block")
+    }
+
+    /// A real FIFO, made with the system `mkfifo`: `rustix` has no `mknodat`
+    /// on macOS. The process is spawned in this test helper only.
+    #[cfg(unix)]
+    #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+    fn mkfifo(p: &Path) {
+        let status = std::process::Command::new("mkfifo")
+            .arg(p)
+            .status()
+            .unwrap();
+        assert!(status.success(), "mkfifo failed");
+    }
+
+    // #173: a regular file replaced by a FIFO after the check must not block
+    // the open (it is not opened for a blocking read) and is an error.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_swapped_in_after_the_check_is_an_error_not_a_hang() {
+        let (_tmp, base, _) = sandbox();
+        let file = base.join("extensions.json");
+        std::fs::write(&file, b"[]").unwrap();
+        let target = file.clone();
+        let err = read_within(file, move || {
+            std::fs::remove_file(&target).unwrap();
+            mkfifo(&target);
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err:?}");
+    }
+
+    // #173: a symlink swapped in after the check is not followed, even when
+    // it points at a readable file with the same content.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swapped_in_after_the_check_is_refused() {
+        let (_tmp, base, _) = sandbox();
+        let file = base.join("extensions.json");
+        let other = base.join("other.json");
+        std::fs::write(&file, b"[]").unwrap();
+        std::fs::write(&other, b"[]").unwrap();
+        let (target, to) = (file.clone(), other.clone());
+        let err = read_within(file, move || {
+            std::fs::remove_file(&target).unwrap();
+            symlink(&to, &target).unwrap();
+        })
+        .unwrap_err();
+        assert!(
+            err.raw_os_error().is_some() || err.kind() == io::ErrorKind::InvalidData,
+            "{err:?}"
+        );
+    }
+
+    // #173: another regular file in its place is another identity.
+    #[cfg(unix)]
+    #[test]
+    fn another_file_swapped_in_after_the_check_is_refused() {
+        let (_tmp, base, _) = sandbox();
+        let file = base.join("extensions.json");
+        std::fs::write(&file, b"[]").unwrap();
+        let (target, aside) = (file.clone(), base.join("aside"));
+        let err = read_within(file, move || {
+            std::fs::rename(&target, &aside).unwrap();
+            std::fs::write(&target, b"[1]").unwrap();
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err:?}");
+    }
+
+    // #173: a FIFO that is already there is refused by the check, without an
+    // open at all, and the file that was checked is read as before.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_that_is_already_there_is_an_error() {
+        let (_tmp, base, _) = sandbox();
+        let fifo = base.join("pipe.json");
+        mkfifo(&fifo);
+        let err = read_within(fifo, || {}).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{err:?}");
+        let ok = base.join("ok.json");
+        std::fs::write(&ok, b"{}").unwrap();
+        assert_eq!(read_within(ok, || {}).unwrap(), "{}");
     }
 
     fn file_meta(is_dir: bool, ino: u64) -> Metadata {

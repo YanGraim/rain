@@ -1772,6 +1772,59 @@ mod engines_tests {
         }
     }
 
+    /// The state files of the Cursor and VS Code global storage that the
+    /// protection list names, by file name. The audit below ties this table
+    /// to `protected.list` in both directions.
+    const EDITOR_STATE_FILES: &[&str] = &[
+        "state.vscdb",
+        "state.vscdb-wal",
+        "state.vscdb-shm",
+        "state.vscdb-journal",
+        "agent-host.db",
+        "conversation-search.db",
+    ];
+
+    // #172: the journal of the state database and the agent and search
+    // databases next to it are state, in both editors, and are never listed.
+    #[test]
+    fn editor_state_files_are_protected_in_both_editors() {
+        for editor in ["Cursor", "Code"] {
+            for name in EDITOR_STATE_FILES {
+                assert_engine_protected(&format!(
+                    "Library/Application Support/{editor}/User/globalStorage/{name}"
+                ));
+            }
+        }
+    }
+
+    // #172: the table and the list say the same, so a state file added to
+    // either without the other fails here; ordinary neighbours and the backups
+    // stay unprotected.
+    #[test]
+    fn editor_state_table_matches_the_protection_list() {
+        use std::collections::BTreeSet;
+        let table: BTreeSet<&str> = EDITOR_STATE_FILES.iter().copied().collect();
+        for editor in ["Cursor", "Code"] {
+            let prefix = format!("~/Library/Application Support/{editor}/User/globalStorage/");
+            let listed: BTreeSet<&str> = include_str!("protected.list")
+                .lines()
+                .map(str::trim)
+                .filter_map(|l| l.strip_prefix(prefix.as_str()))
+                .collect();
+            assert_eq!(listed, table, "{editor}");
+            let g = Path::new(HOME)
+                .join("Library/Application Support")
+                .join(editor)
+                .join("User/globalStorage");
+            for neighbour in ["storage.json", "state.vscdb.backup", "state.vscdb.bak-1"] {
+                assert!(
+                    !builtin().is_protected(&g.join(neighbour)),
+                    "{editor}/{neighbour}"
+                );
+            }
+        }
+    }
+
     // FR-004, FR-007: the whole Claude app VM folder (sessions, identity).
     #[test]
     fn claude_vm_bundles_is_protected() {
