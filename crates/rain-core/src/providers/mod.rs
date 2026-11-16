@@ -2,5 +2,7 @@
 //! fully understood is a [`crate::tools::ParseError`].
 
 pub(crate) mod docker;
+pub(crate) mod ollama;
+pub(crate) mod podman;
 pub(crate) mod simctl;
 pub(crate) mod size_text;
