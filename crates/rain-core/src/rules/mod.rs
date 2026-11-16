@@ -9,6 +9,7 @@ mod browser;
 mod caches_state_audit;
 mod children;
 mod containers;
+mod devtools;
 mod extensions;
 mod macos;
 mod models;
@@ -32,6 +33,7 @@ static ORDER: &[&[&dyn Rule]] = &[
     models::RULES,
     containers::RULES,
     pkg::RULES,
+    devtools::RULES,
     &[&macos::HOMEBREW_CACHE],
     apple::RULES,
     &[&macos::XCODE_DERIVED_DATA],
@@ -437,12 +439,19 @@ mod tests {
                 "pkg.pip",
                 "pkg.uv",
                 "pkg.poetry",
+                "pkg.rustup",
+                "pkg.cargo",
+                "pkg.go-build",
+                "pkg.go-mod",
+                "pkg.gradle",
+                "pkg.maven",
                 "pkg.homebrew",
                 "apple.archives",
                 "apple.device-support",
                 "apple.previews",
                 "apple.derived-data",
                 "sys.sensitive-caches",
+                "sys.crash-reports",
                 "sys.logs",
                 "sys.user-caches",
                 "proj.rust-target",

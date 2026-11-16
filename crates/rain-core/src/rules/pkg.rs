@@ -242,8 +242,8 @@ pub static POETRY: ChildrenOfRoots = ChildrenOfRoots {
 
 /// Like [`ChildrenOf`] at depth 1, but over folders under different roots.
 pub struct ChildrenOfRoots {
-    meta: RuleMeta,
-    roots: &'static [(Root, &'static str)],
+    pub(super) meta: RuleMeta,
+    pub(super) roots: &'static [(Root, &'static str)],
 }
 
 impl Rule for ChildrenOfRoots {

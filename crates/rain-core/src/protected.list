@@ -67,6 +67,16 @@
 # system until they finish; removing them breaks the transfer.
 ~/Library/Caches/com.apple.nsurlsessiond
 
+# Developer tools: next to their caches these hold binaries, configuration and
+# credentials (Cargo registry tokens, Maven server passwords). The cache rules
+# name only their cache folders; these are kept even for a root the user gives.
+~/.cargo/bin
+~/.cargo/config
+~/.cargo/config.toml
+~/.cargo/credentials
+~/.cargo/credentials.toml
+~/.m2/settings.xml
+
 # Container engines: VM disks and data, cleaned only by the engine itself.
 # Docker's group container is already covered by ~/Library/Group Containers.
 ~/Library/Containers/com.docker.docker
