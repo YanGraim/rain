@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 pub use crate::walk::{SkipReason, Skipped};
 
 /// Version of the report layout; bumped on any breaking change (FR-010).
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Stable rule identifier, e.g. `sys.user-caches`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -163,6 +163,16 @@ pub struct RuleTotal {
     pub allocated_bytes: u64,
     /// Number of items (candidates), not files.
     pub items: u64,
+    /// Message catalogue key of the rule's name.
+    pub name_key: &'static str,
+    /// FR-002: message key of what the user loses when an item goes.
+    pub consequence_key: &'static str,
+    /// FR-014: whether the rule is preselected.
+    pub default_selected: bool,
+    /// FR-015: bundle id of the app that must be closed first.
+    pub requires_app_closed: Option<&'static str>,
+    /// Whether its items are found by walking files or asked of a tool.
+    pub source: ItemSource,
 }
 
 /// FR-004: user data that exists, measured and only informed. It has no

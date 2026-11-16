@@ -1,0 +1,112 @@
+---
+source: crates/rain-cli/src/output.rs
+expression: render_json(&v2_report()).unwrap()
+---
+{
+  "items": [
+    {
+      "allocated_bytes": 1200000000,
+      "file_count": 3,
+      "id": "1805bb2fe3d459f9",
+      "path": "/Users/u/Library/Caches/com.a",
+      "rule": "sys.user-caches"
+    },
+    {
+      "allocated_bytes": 4096,
+      "file_count": 1,
+      "id": "1805b82fe3d454e0",
+      "path": "/Users/u/Library/Caches/com.b",
+      "rule": "sys.user-caches"
+    }
+  ],
+  "providers": [
+    {
+      "rule": "containers.build-cache",
+      "status": "ok"
+    },
+    {
+      "rule": "containers.volumes",
+      "status": "timeout"
+    },
+    {
+      "rule": "containers.stopped",
+      "status": "failed"
+    },
+    {
+      "rule": "containers.unused-images",
+      "status": "parse"
+    }
+  ],
+  "rules": [
+    {
+      "allocated_bytes": 1200004096,
+      "category": "system-caches",
+      "consequence_key": "rule.sys.user-caches.consequence",
+      "default_selected": true,
+      "id": "sys.user-caches",
+      "items": 2,
+      "name_key": "rule.sys.user-caches",
+      "requires_app_closed": null,
+      "risk": "low",
+      "source": "fs"
+    },
+    {
+      "allocated_bytes": 0,
+      "category": "logs",
+      "consequence_key": "rule.sys.logs.consequence",
+      "default_selected": true,
+      "id": "sys.logs",
+      "items": 0,
+      "name_key": "rule.sys.logs",
+      "requires_app_closed": null,
+      "risk": "low",
+      "source": "fs"
+    },
+    {
+      "allocated_bytes": 0,
+      "category": "containers",
+      "consequence_key": "rule.containers.build-cache.consequence",
+      "default_selected": false,
+      "id": "containers.build-cache",
+      "items": 2,
+      "name_key": "rule.containers.build-cache",
+      "requires_app_closed": "com.docker.docker",
+      "risk": "medium",
+      "source": "tool"
+    }
+  ],
+  "schema_version": 2,
+  "skipped": [],
+  "tool_items": [
+    {
+      "id": "e84c8e5507032dda",
+      "key": "cache",
+      "label": "Build cache",
+      "reported_bytes": 2000000000,
+      "rule": "containers.build-cache"
+    },
+    {
+      "id": "a690f5fe1ffdcc85",
+      "key": "old",
+      "label": "img\u001b]52;c;x\u0007‮",
+      "reported_bytes": 5,
+      "rule": "containers.build-cache"
+    }
+  ],
+  "tool_total_bytes": 2000000005,
+  "total_bytes": 1200004096,
+  "unmanaged": [
+    {
+      "allocated_bytes": 2500000000,
+      "file_count": 7,
+      "key": "claude-code.history",
+      "path": "/Users/u/.claude/projects"
+    },
+    {
+      "allocated_bytes": 4096,
+      "file_count": 1,
+      "key": "codex.sessions",
+      "path": "/Users/u/.codex/sessions"
+    }
+  ]
+}
