@@ -150,6 +150,10 @@
   "userdata.aider.chat-history": "Aider: chat history",
   "report.unmanaged": "Your data (not cleaned)",
   "report.unmanaged-note": "Rain only shows the size of these folders. It never cleans them.",
+  "report.excluded": {
+    "one": "{rule}: {count} item is listed by a more specific rule",
+    "other": "{rule}: {count} items are listed by a more specific rule"
+  },
   "report.tool-total": "Inside tools",
   "report.tool-total-note": "Reported by the tool itself. Freeing it may not free the same space on your disk.",
   "provider.unavailable.not-installed": "{tool} is not installed",

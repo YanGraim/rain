@@ -2,14 +2,15 @@
 
 use crate::fs::Fs;
 use crate::model::{
-    ItemId, ItemSource, ProviderStatus, RuleId, RuleTotal, ScanItem, ScanReport, SkipReason,
-    Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
+    Excluded, ExcludedReason, ItemId, ItemSource, ProviderStatus, RuleId, RuleTotal, ScanItem,
+    ScanReport, SkipReason, Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
 };
 use crate::protect::ProtectList;
 use crate::rule::{EntryInfo, ProviderRule, RootedPath, Rule, RuleContext, RuleKind};
 use crate::tools::{ExitStatusKind, ProviderItem, ToolError, ToolId, ToolOutput, ToolRunner};
 use crate::walk::Walker;
 use rain_platform::Root;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 use std::path::{Component, Path, PathBuf};
@@ -68,22 +69,26 @@ pub fn scan(
             Ok(probes) => probes,
             Err(panic) => std::panic::resume_unwind(panic),
         };
-        let (items, mut skipped) = files?;
+        let (items, mut skipped, excluded) = files?;
         skipped.extend(refusals);
         let unmanaged = measure_unmanaged(ctx, &mut skipped, cancel)?;
         let (tool_items, providers) = check_tool_paths(probes?, ctx, &mut skipped);
         Ok(report(
-            rules, items, skipped, tool_items, providers, unmanaged,
+            rules, items, skipped, tool_items, providers, unmanaged, excluded,
         ))
     })
 }
+
+/// What the file rules found: the items, what was left out of them and why,
+/// and what each rule left to another one.
+type Files = (Vec<ScanItem>, BTreeSet<Skipped>, Vec<Excluded>);
 
 /// Discovery and measurement of the file rules.
 fn scan_files(
     rules: &[&dyn Rule],
     ctx: &ScanContext,
     cancel: &AtomicBool,
-) -> Result<(Vec<ScanItem>, BTreeSet<Skipped>), ScanError> {
+) -> Result<Files, ScanError> {
     let threads = ctx
         .threads
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
@@ -92,8 +97,19 @@ fn scan_files(
         .with_cancel(cancel);
     let mut skipped = BTreeSet::new();
 
-    let found = discover(rules, ctx, &mut walker, &mut skipped, cancel)?;
+    let (found, same_path) = discover(rules, ctx, &mut walker, &mut skipped, cancel)?;
     let accepted = accept(found, ctx.protect, &mut skipped);
+    // #79: what each rule left out, with what each exclusion needs to still
+    // be true once the items are final (see `still_true`).
+    let mut left_out: Vec<(Excluded, Vec<(RuleId, PathBuf)>)> = same_path
+        .into_iter()
+        .filter(|e| accepted.contains_key(&e.path))
+        .map(|e| {
+            let needs = vec![(e.kept_by, e.path.clone())];
+            (e, needs)
+        })
+        .collect();
+    let mut owners: BTreeMap<u32, (RuleId, PathBuf)> = BTreeMap::new();
 
     let mut order: Vec<(RuleId, &PathBuf, usize)> = accepted
         .iter()
@@ -107,6 +123,34 @@ fn scan_files(
         let m = walker.measure_excluding(path, &excluded);
         if m.cancelled {
             return Err(ScanError::Cancelled);
+        }
+        owners.insert(m.generation, (rule, path.clone()));
+        for inner in &excluded {
+            if let Some(kept_by) = accepted
+                .get(inner)
+                .and_then(|&i| rules.get(i))
+                .map(|r| r.meta().id)
+            {
+                let e = Excluded {
+                    rule,
+                    path: inner.clone(),
+                    kept_by,
+                    reason: ExcludedReason::InsideItem,
+                };
+                left_out.push((e, vec![(kept_by, inner.clone())]));
+            }
+        }
+        for first in &m.shared_with {
+            if let Some((kept_by, owner_path)) = owners.get(first) {
+                let e = Excluded {
+                    rule,
+                    path: path.clone(),
+                    kept_by: *kept_by,
+                    reason: ExcludedReason::SharedHardlink,
+                };
+                let needs = vec![(rule, path.clone()), (*kept_by, owner_path.clone())];
+                left_out.push((e, needs));
+            }
         }
         // A root that could not be opened or listed is not an item.
         let unmeasured = m.skipped.iter().any(|s| &s.path == path);
@@ -122,7 +166,31 @@ fn scan_files(
         }
     }
     let items = refuse_holders_of_protected(items, &mut skipped);
-    Ok((items, skipped))
+    let excluded = still_true(left_out, &items);
+    Ok((items, skipped, excluded))
+}
+
+/// #79: an exclusion is told only while the items it talks about are still in
+/// the report (one refused for holding something protected is not). Sorted,
+/// without duplicates.
+fn still_true(
+    left_out: Vec<(Excluded, Vec<(RuleId, PathBuf)>)>,
+    items: &[ScanItem],
+) -> Vec<Excluded> {
+    let live: BTreeSet<(RuleId, &Path)> =
+        items.iter().map(|i| (i.rule, i.path.as_path())).collect();
+    let mut kept: Vec<Excluded> = left_out
+        .into_iter()
+        .filter(|(_, needs)| {
+            needs
+                .iter()
+                .all(|(rule, path)| live.contains(&(*rule, path.as_path())))
+        })
+        .map(|(e, _)| e)
+        .collect();
+    kept.sort();
+    kept.dedup();
+    kept
 }
 
 /// FR-004: measures the user data that exists, read only, with the same
@@ -208,8 +276,9 @@ fn discover(
     walker: &mut Walker,
     skipped: &mut BTreeSet<Skipped>,
     cancel: &AtomicBool,
-) -> Result<BTreeMap<PathBuf, usize>, ScanError> {
+) -> Result<(BTreeMap<PathBuf, usize>, Vec<Excluded>), ScanError> {
     let mut found: BTreeMap<PathBuf, usize> = BTreeMap::new();
+    let mut same_path: Vec<Excluded> = Vec::new();
     for (idx, rule) in rules.iter().enumerate() {
         let RuleKind::Files(files) = rule.kind() else {
             continue;
@@ -257,10 +326,26 @@ fn discover(
             candidates.extend(d.candidates);
         }
         for path in without_nested(candidates) {
-            found.entry(path).or_insert(idx);
+            match found.entry(path) {
+                Entry::Vacant(slot) => {
+                    slot.insert(idx);
+                }
+                // #79: the earlier rule keeps it; this one is told so.
+                Entry::Occupied(taken) if *taken.get() != idx => {
+                    if let Some(kept) = rules.get(*taken.get()) {
+                        same_path.push(Excluded {
+                            rule: rule.meta().id,
+                            path: taken.key().clone(),
+                            kept_by: kept.meta().id,
+                            reason: ExcludedReason::SamePath,
+                        });
+                    }
+                }
+                Entry::Occupied(_) => {}
+            }
         }
     }
-    Ok(found)
+    Ok((found, same_path))
 }
 
 /// FR-007: a candidate that would take protected data with it is refused
@@ -607,6 +692,7 @@ fn report(
     tool_items: Vec<ToolItem>,
     providers: Vec<ProviderStatus>,
     unmanaged: Vec<Unmanaged>,
+    excluded: Vec<Excluded>,
 ) -> ScanReport {
     let mut totals: Vec<RuleTotal> = rules
         .iter()
@@ -663,6 +749,7 @@ fn report(
         providers,
         tool_total_bytes,
         unmanaged,
+        excluded,
     }
 }
 
@@ -670,7 +757,9 @@ fn report(
 mod tests {
     use super::*;
     use crate::fs::{DirEntryInfo, FakeFs, Metadata};
-    use crate::model::{Category, ItemId, Risk, RuleId, ScanItem, SkipReason, Skipped};
+    use crate::model::{
+        Category, ExcludedReason, ItemId, Risk, RuleId, ScanItem, SkipReason, Skipped,
+    };
     use crate::rule::{EntryInfo, FileRule, RootedPath, RuleKind, RuleMeta, Visit};
     use rain_platform::{Os, Platform, PlatformError, Root};
     use std::io;
@@ -1360,6 +1449,181 @@ mod tests {
             ]
         );
         assert_eq!(report.total_bytes, 12 * 512);
+    }
+
+    /// `(path, rule that lost it, rule that kept it, reason)` of every
+    /// excluded entry, in report order.
+    fn excluded(report: &ScanReport) -> Vec<(PathBuf, &'static str, &'static str, ExcludedReason)> {
+        report
+            .excluded
+            .iter()
+            .map(|e| {
+                (
+                    e.path.clone(),
+                    e.rule.as_str(),
+                    e.kept_by.as_str(),
+                    e.reason,
+                )
+            })
+            .collect()
+    }
+
+    // #79: the same path found by two rules goes to the earlier one; the
+    // other one is told which rule kept it.
+    #[test]
+    fn excluded_equal_path_names_the_rule_that_kept_it() {
+        let mut fs = base();
+        fs.insert(c("x"), file(30, 8));
+        let specific = rule("z.specific", under(Root::Caches, ""));
+        let generic = rule("a.generic", under(Root::Caches, ""));
+        let report = run(&fs, &[&specific, &generic]);
+        assert_eq!(
+            excluded(&report),
+            vec![(c("x"), "a.generic", "z.specific", ExcludedReason::SamePath)]
+        );
+    }
+
+    // #79: an item of another rule below an item is measured apart; the outer
+    // rule is told that the inner item was left to the other rule.
+    #[test]
+    fn excluded_inside_item_of_a_more_specific_rule() {
+        let mut fs = base();
+        fs.insert(c("Homebrew"), meta(true, 20, 2, 2))
+            .insert(c("Homebrew/pkg1"), file(21, 8))
+            .insert(c("Homebrew/pkg2"), dir(22))
+            .insert(c("Homebrew/pkg2/f"), file(23, 16))
+            .insert(c("other"), file(24, 4));
+        let brew = rule("macos.homebrew.cache", under(Root::Caches, "Homebrew"));
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let both = run(&fs, &[&brew, &caches]);
+        assert_eq!(
+            excluded(&both),
+            vec![
+                (
+                    c("Homebrew/pkg1"),
+                    "macos.user.caches",
+                    "macos.homebrew.cache",
+                    ExcludedReason::InsideItem
+                ),
+                (
+                    c("Homebrew/pkg2"),
+                    "macos.user.caches",
+                    "macos.homebrew.cache",
+                    ExcludedReason::InsideItem
+                ),
+            ]
+        );
+    }
+
+    // #79: bytes of a hardlinked inode are counted in the first item; the
+    // item that lost them says which rule has them.
+    #[test]
+    fn excluded_shared_hardlink_names_the_first_owner() {
+        let mut fs = base();
+        fs.insert(c("k"), meta(false, 50, 2, 8))
+            .insert(l("k"), meta(false, 50, 2, 8))
+            .insert(c("c"), meta(false, 60, 2, 4))
+            .insert(c("b"), meta(false, 60, 2, 4));
+        let z = rule("z.rule", under(Root::Caches, ""));
+        let a = rule("a.rule", under(Root::Logs, ""));
+        let report = run(&fs, &[&z, &a]);
+        assert_eq!(
+            excluded(&report),
+            vec![
+                (c("c"), "z.rule", "z.rule", ExcludedReason::SharedHardlink),
+                (c("k"), "z.rule", "a.rule", ExcludedReason::SharedHardlink),
+            ]
+        );
+    }
+
+    // #79: one hardlink twice inside the same item is not an exclusion.
+    #[test]
+    fn excluded_is_empty_with_a_single_rule() {
+        let mut fs = base();
+        fs.insert(c("a"), dir(40))
+            .insert(c("a/one"), meta(false, 41, 2, 8))
+            .insert(c("a/two"), meta(false, 41, 2, 8))
+            .insert(c("b"), file(42, 4));
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let report = run(&fs, &[&caches]);
+        assert!(report.excluded.is_empty(), "{:?}", report.excluded);
+    }
+
+    // #79: what was excluded is in no total and is not an item: the totals
+    // are the same with or without the overlapping rule.
+    #[test]
+    fn excluded_changes_no_total_and_is_not_selectable() {
+        let mut fs = base();
+        fs.insert(c("Homebrew"), meta(true, 20, 2, 2))
+            .insert(c("Homebrew/pkg1"), file(21, 8))
+            .insert(c("other"), file(24, 4));
+        let brew = rule("macos.homebrew.cache", under(Root::Caches, "Homebrew"));
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let both = run(&fs, &[&brew, &caches]);
+        let alone = run(&fs, &[&caches]);
+        assert!(!both.excluded.is_empty());
+        assert_eq!(both.total_bytes, alone.total_bytes);
+        let item_sum: u64 = both.items.iter().map(|i| i.allocated_bytes).sum();
+        let rule_sum: u64 = both.rules.iter().map(|r| r.allocated_bytes).sum();
+        assert_eq!((item_sum, rule_sum), (both.total_bytes, both.total_bytes));
+        // Excluded entries are not items: no id, nothing to select.
+        assert!(both.excluded.iter().all(|e| both
+            .items
+            .iter()
+            .all(|i| !(i.rule == e.rule && i.path == e.path))
+            || both
+                .items
+                .iter()
+                .any(|i| i.path == e.path && i.rule == e.kept_by)));
+    }
+
+    // #79: an item that is refused (it holds something protected) is not an
+    // item, so no rule is told that another one kept it.
+    #[test]
+    fn excluded_is_not_told_about_a_refused_item() {
+        let mut fs = base();
+        fs.insert("/Users/Tester/.ssh", dir(10))
+            .insert("/Users/Tester/.ssh/id_ed25519", file(11, 8))
+            .insert("/Users/Tester/junk", file(14, 2));
+        let specific = rule("z.specific", under(Root::Home, ""));
+        let generic = rule("a.generic", under(Root::Home, ""));
+        let report = run(&fs, &[&specific, &generic]);
+        // `junk` is found by both rules; the protected `.ssh` is refused.
+        assert!(report
+            .skipped
+            .iter()
+            .any(|s| s.path.as_path() == Path::new("/Users/Tester/.ssh")
+                && s.reason == SkipReason::Protected));
+        assert_eq!(
+            excluded(&report),
+            vec![(
+                PathBuf::from("/Users/Tester/junk"),
+                "a.generic",
+                "z.specific",
+                ExcludedReason::SamePath
+            )]
+        );
+    }
+
+    // #79, FR-010: sorted and the same on every run.
+    #[test]
+    fn excluded_is_sorted_and_stable() {
+        let mut fs = base();
+        fs.insert(c("Homebrew"), meta(true, 20, 2, 2))
+            .insert(c("Homebrew/pkg1"), file(21, 8))
+            .insert(c("Homebrew/pkg2"), file(22, 8))
+            .insert(c("x"), file(30, 8));
+        let brew = rule("macos.homebrew.cache", under(Root::Caches, "Homebrew"));
+        let caches = rule("macos.user.caches", under(Root::Caches, ""));
+        let generic = rule("a.generic", under(Root::Caches, ""));
+        let first = run(&fs, &[&brew, &caches, &generic]);
+        let again = run(&fs, &[&brew, &caches, &generic]);
+        assert_eq!(first.excluded, again.excluded);
+        let mut sorted = first.excluded.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(first.excluded, sorted);
+        assert!(first.excluded.len() >= 3, "{:?}", first.excluded);
     }
 
     // FR-009: a rule root that does not exist is not an error and

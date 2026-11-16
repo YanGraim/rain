@@ -3,6 +3,7 @@ source: crates/rain-cli/src/output.rs
 expression: render_json(&v2_report()).unwrap()
 ---
 {
+  "excluded": [],
   "items": [
     {
       "allocated_bytes": 1200000000,

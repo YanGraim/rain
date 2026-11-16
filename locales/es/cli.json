@@ -150,6 +150,10 @@
   "userdata.aider.chat-history": "Aider: historial de chat",
   "report.unmanaged": "Tus datos (no se limpian)",
   "report.unmanaged-note": "Rain solo muestra el tamaño de estas carpetas. Nunca las limpia.",
+  "report.excluded": {
+    "one": "{rule}: {count} elemento queda para una regla más específica",
+    "other": "{rule}: {count} elementos quedan para una regla más específica"
+  },
   "report.tool-total": "Dentro de herramientas",
   "report.tool-total-note": "Lo informa la propia herramienta. Liberarlo puede no liberar el mismo espacio en tu disco.",
   "provider.unavailable.not-installed": "{tool} no está instalado",

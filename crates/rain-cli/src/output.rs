@@ -6,7 +6,8 @@ use std::io::ErrorKind;
 
 use rain_core::messages::{Catalog, MessageKey};
 use rain_core::model::{
-    Category, ItemId, ItemSource, Risk, RuleId, ScanReport, SkipReason, ToolStatus, Unavailable,
+    Category, ExcludedReason, ItemId, ItemSource, Risk, RuleId, ScanReport, SkipReason, ToolStatus,
+    Unavailable,
 };
 use rain_core::rule::RuleKind;
 use rain_core::rules;
@@ -68,6 +69,7 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
         out.push('\n');
     }
     push_unmanaged(&mut out, report, catalog);
+    push_excluded(&mut out, report, catalog);
     let skipped = u64::try_from(report.skipped.len()).unwrap_or(u64::MAX);
     if skipped > 0 {
         let line = catalog
@@ -108,6 +110,27 @@ fn push_unmanaged(out: &mut String, report: &ScanReport, catalog: &Catalog) {
     let widths = column_widths(&rows);
     for row in &rows {
         push_row(out, row, &widths);
+    }
+}
+
+/// #79: how many items each rule left to a more specific one. A count per
+/// rule, in rule order; nothing when there is nothing to say.
+fn push_excluded(out: &mut String, report: &ScanReport, catalog: &Catalog) {
+    let mut per_rule: std::collections::BTreeMap<RuleId, u64> = std::collections::BTreeMap::new();
+    for e in &report.excluded {
+        *per_rule.entry(e.rule).or_insert(0) += 1;
+    }
+    if per_rule.is_empty() {
+        return;
+    }
+    out.push('\n');
+    for (rule, count) in per_rule {
+        let line = catalog
+            .get_plural(MessageKey::ReportExcluded, count)
+            .replace("{rule}", rule.as_str())
+            .replace("{count}", &count.to_string());
+        out.push_str(&line);
+        out.push('\n');
     }
 }
 
@@ -332,6 +355,20 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
             })
         })
         .collect();
+    // #79: what a rule left out because another one keeps it. No item id, and
+    // in no total.
+    let excluded: Vec<Value> = report
+        .excluded
+        .iter()
+        .map(|e| {
+            json!({
+                "rule": e.rule.as_str(),
+                "path": e.path.to_string_lossy(),
+                "kept_by": e.kept_by.as_str(),
+                "reason": excluded_reason_str(e.reason),
+            })
+        })
+        .collect();
     let doc = json!({
         "schema_version": report.schema_version,
         "rules": rules,
@@ -342,6 +379,7 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
         "tool_items": tool_items,
         "tool_total_bytes": report.tool_total_bytes,
         "providers": providers,
+        "excluded": excluded,
     });
     let mut out = serde_json::to_string_pretty(&doc)?;
     out.push('\n');
@@ -351,6 +389,14 @@ pub fn render_json(report: &ScanReport) -> Result<String, serde_json::Error> {
 // Hex string: JSON consumers in JavaScript lose precision above 2^53.
 fn item_id_str(id: ItemId) -> String {
     format!("{:016x}", id.0)
+}
+
+fn excluded_reason_str(r: ExcludedReason) -> &'static str {
+    match r {
+        ExcludedReason::SamePath => "same-path",
+        ExcludedReason::InsideItem => "inside-item",
+        ExcludedReason::SharedHardlink => "shared-hardlink",
+    }
 }
 
 fn source_str(s: ItemSource) -> &'static str {
@@ -446,8 +492,9 @@ mod tests {
     use super::*;
     use rain_core::messages::Locale;
     use rain_core::model::{
-        Category, ItemId, ItemSource, ProviderStatus, Risk, RuleId, RuleTotal, ScanItem,
-        SkipReason, Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged, SCHEMA_VERSION,
+        Category, Excluded, ExcludedReason, ItemId, ItemSource, ProviderStatus, Risk, RuleId,
+        RuleTotal, ScanItem, SkipReason, Skipped, ToolItem, ToolStatus, Unavailable, Unmanaged,
+        SCHEMA_VERSION,
     };
     use std::io::ErrorKind;
     use std::path::PathBuf;
@@ -513,6 +560,7 @@ mod tests {
             providers: Vec::new(),
             tool_total_bytes: 0,
             unmanaged: Vec::new(),
+            excluded: Vec::new(),
         }
     }
 
@@ -1076,6 +1124,111 @@ mod tests {
             ]
         );
         assert!(v["providers"][0].as_object().unwrap().contains_key("rule"));
+    }
+
+    // --- #79: what a more specific rule kept --------------------------------
+
+    fn with_excluded() -> ScanReport {
+        let mut r = v2_report();
+        let sys = RuleId::new("sys.user-caches");
+        let brew = RuleId::new("pkg.homebrew");
+        let ex = |path: &str, rule: RuleId, kept_by: RuleId, reason: ExcludedReason| Excluded {
+            path: PathBuf::from(path),
+            rule,
+            kept_by,
+            reason,
+        };
+        r.excluded = vec![
+            ex(
+                "/Users/u/Library/Caches/Homebrew/a",
+                sys,
+                brew,
+                ExcludedReason::InsideItem,
+            ),
+            ex(
+                "/Users/u/Library/Caches/Homebrew/b",
+                sys,
+                brew,
+                ExcludedReason::InsideItem,
+            ),
+            ex(
+                "/Users/u/Library/Caches/x",
+                sys,
+                brew,
+                ExcludedReason::SamePath,
+            ),
+            ex(
+                "/Users/u/Library/Logs/k",
+                LOGS,
+                CACHES,
+                ExcludedReason::SharedHardlink,
+            ),
+        ];
+        r
+    }
+
+    // #79: additive `excluded` list: path, the rule that lost it, the rule
+    // that kept it and the reason in kebab-case; `schema_version` stays 2.
+    #[test]
+    fn json_lists_excluded_items_without_ids_or_totals() {
+        let v = json(&with_excluded());
+        assert_eq!(v["schema_version"], 2);
+        let list = v["excluded"].as_array().unwrap();
+        assert_eq!(list.len(), 4);
+        for e in list {
+            let keys: Vec<&str> = e.as_object().unwrap().keys().map(String::as_str).collect();
+            assert_eq!(keys, ["kept_by", "path", "reason", "rule"]);
+        }
+        assert_eq!(list[0]["reason"], "inside-item");
+        assert_eq!(list[2]["reason"], "same-path");
+        assert_eq!(list[3]["reason"], "shared-hardlink");
+        assert_eq!(list[0]["kept_by"], "pkg.homebrew");
+        assert_eq!(list[0]["rule"], "sys.user-caches");
+        // In no total: the same as without it.
+        assert_eq!(v["total_bytes"], json(&v2_report())["total_bytes"]);
+        assert_eq!(v["total_bytes"], 1_200_004_096u64);
+        // Every field of the earlier versions is still there.
+        assert!(json(&v2_report())["excluded"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn json_v2_excluded_snapshot() {
+        insta::assert_snapshot!(render_json(&with_excluded()).unwrap());
+    }
+
+    // #79: the table shows one count per rule, singular or plural, in every
+    // language, and nothing when there is nothing.
+    #[test]
+    fn table_counts_excluded_items_per_rule_in_all_locales() {
+        for locale in [Locale::En, Locale::Es, Locale::PtBr] {
+            let catalog = Catalog::for_locale(locale).unwrap();
+            let out = render_table(&with_excluded(), &catalog);
+            let one = catalog
+                .get_plural(MessageKey::ReportExcluded, 1)
+                .replace("{rule}", "sys.logs")
+                .replace("{count}", "1");
+            let many = catalog
+                .get_plural(MessageKey::ReportExcluded, 3)
+                .replace("{rule}", "sys.user-caches")
+                .replace("{count}", "3");
+            assert!(
+                out.contains(&one),
+                "{}: {one:?} missing in\n{out}",
+                locale.tag()
+            );
+            assert!(
+                out.contains(&many),
+                "{}: {many:?} missing in\n{out}",
+                locale.tag()
+            );
+            // The paths are not listed in the table.
+            assert!(!out.contains("Homebrew/a"), "{out}");
+        }
+        let out = render_table(&report(Vec::new()), &en());
+        assert!(!out.contains("more specific"), "{out}");
     }
 
     // FR-013: the skipped line uses the singular form for one item.

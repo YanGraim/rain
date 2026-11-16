@@ -3,7 +3,7 @@
 use crate::fs::{is_swapped, Fs, Metadata};
 use crate::protect::ProtectList;
 use crate::rule::Visit;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -72,6 +72,12 @@ pub struct Measure {
     /// FR-011: the walk stopped early; totals are partial and must never be
     /// shown as final.
     pub cancelled: bool,
+    /// Which measurement this was, counting from 1 in this walker.
+    pub generation: u32,
+    /// The earlier measurements (by [`Self::generation`]) that had already
+    /// counted a hardlinked file this one met, so it is not counted again.
+    /// A file met twice in the same measurement is not reported.
+    pub shared_with: BTreeSet<u32>,
 }
 
 /// Candidates found below one discovery root (FR-002).
@@ -91,6 +97,10 @@ pub struct Walker<'a> {
     fs: &'a dyn Fs,
     protect: &'a ProtectList,
     seen: HashSet<(u64, u64)>,
+    /// The measurement that counted each hardlinked inode first.
+    owner: HashMap<(u64, u64), u32>,
+    /// Measurements started so far.
+    generation: u32,
     threads: usize,
     cancel: Option<&'a AtomicBool>,
 }
@@ -103,6 +113,8 @@ impl<'a> Walker<'a> {
             fs,
             protect,
             seen: HashSet::new(),
+            owner: HashMap::new(),
+            generation: 0,
             threads: 1,
             cancel: None,
         }
@@ -135,7 +147,11 @@ impl<'a> Walker<'a> {
     /// below it) is ignored without being reported as skipped: it belongs to
     /// another item and is counted there.
     pub fn measure_excluding(&mut self, root: &Path, excluded: &BTreeSet<PathBuf>) -> Measure {
-        let mut out = Measure::default();
+        self.generation = self.generation.saturating_add(1);
+        let mut out = Measure {
+            generation: self.generation,
+            ..Measure::default()
+        };
         if self.is_cancelled() {
             out.cancelled = true;
             return out;
@@ -347,8 +363,20 @@ impl<'a> Walker<'a> {
             // Blocks added in the merge, only if the listing succeeds.
             next.push((path, meta.blocks, (meta.dev, meta.ino)));
         } else {
-            if meta.nlink > 1 && !self.seen.insert((meta.dev, meta.ino)) {
-                return;
+            if meta.nlink > 1 {
+                let id = (meta.dev, meta.ino);
+                if self.seen.insert(id) {
+                    self.owner.insert(id, self.generation);
+                } else {
+                    // Counted before: by this measurement (a second name of
+                    // the same file, nothing to say) or by an earlier one.
+                    if let Some(&first) = self.owner.get(&id) {
+                        if first != self.generation {
+                            out.shared_with.insert(first);
+                        }
+                    }
+                    return;
+                }
             }
             out.file_count = out.file_count.saturating_add(1);
             out.add_blocks(meta.blocks);
@@ -613,6 +641,35 @@ mod tests {
         let mut w = Walker::new(&fs, &list);
         assert_eq!(sums(&w.measure(&at("r"))), (8 * 512, 1));
         assert_eq!(sums(&w.measure(&at("s"))), (0, 0));
+    }
+
+    // #79: a hardlinked file already counted by an earlier measurement is
+    // reported by which one counted it; one seen twice in the same
+    // measurement is not.
+    #[test]
+    fn shared_hardlinks_name_the_measurement_that_counted_them() {
+        let mut fs = base();
+        fs.insert(at("a"), dir(1))
+            .insert(at("a/k"), entry(false, 7, 2, 8, 0))
+            .insert(at("a/twice"), entry(false, 7, 2, 8, 0))
+            .insert(at("b"), dir(2))
+            .insert(at("b/k"), entry(false, 7, 2, 8, 0))
+            .insert(at("b/own"), file(3, 4))
+            .insert(at("c"), dir(3));
+        let list = protect(&fs);
+        let mut w = Walker::new(&fs, &list).with_threads(1);
+        let first = w.measure(&at("a"));
+        assert_eq!(first.file_count, 1);
+        assert!(first.shared_with.is_empty(), "{:?}", first.shared_with);
+        let second = w.measure(&at("b"));
+        assert_eq!(second.file_count, 1);
+        assert_eq!(
+            second.shared_with.iter().copied().collect::<Vec<_>>(),
+            vec![first.generation]
+        );
+        assert!(second.generation > first.generation);
+        let third = w.measure(&at("c"));
+        assert!(third.shared_with.is_empty());
     }
 
     // FR-003: the seen set is keyed by (dev, ino): the same ino already seen
