@@ -1,0 +1,105 @@
+{
+  "devicetypes" : [
+    {
+      "minRuntimeVersion" : 786432,
+      "bundlePath" : "/Library/Developer/CoreSimulator/Profiles/DeviceTypes/iPhone 11.simdevicetype",
+      "maxRuntimeVersion" : 4294967295,
+      "name" : "iPhone 11",
+      "identifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-11",
+      "productFamily" : "iPhone"
+    }
+  ],
+  "runtimes" : [
+    {
+      "bundlePath" : "/Library/Developer/CoreSimulator/Volumes/iOS_21A5277g/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 17.0.simruntime",
+      "buildversion" : "21A5277g",
+      "platform" : "iOS",
+      "runtimeRoot" : "/Library/Developer/CoreSimulator/Volumes/iOS_21A5277g/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 17.0.simruntime/Contents/Resources/RuntimeRoot",
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.iOS-17-0",
+      "version" : "17.0",
+      "isInternal" : false,
+      "isAvailable" : true,
+      "name" : "iOS 17.0",
+      "supportedDeviceTypes" : [
+        {
+          "bundlePath" : "/Library/Developer/CoreSimulator/Profiles/DeviceTypes/iPhone 11.simdevicetype",
+          "name" : "iPhone 11",
+          "identifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-11",
+          "productFamily" : "iPhone"
+        }
+      ]
+    },
+    {
+      "bundlePath" : "/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 15.5.simruntime",
+      "buildversion" : "19F70",
+      "platform" : "iOS",
+      "runtimeRoot" : "/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 15.5.simruntime/Contents/Resources/RuntimeRoot",
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.iOS-15-5",
+      "version" : "15.5",
+      "isInternal" : false,
+      "isAvailable" : false,
+      "name" : "iOS 15.5",
+      "supportedDeviceTypes" : [ ]
+    },
+    {
+      "bundlePath" : "/Library/Developer/CoreSimulator/Profiles/Runtimes/Internal.simruntime",
+      "buildversion" : "99Z1",
+      "platform" : "iOS",
+      "runtimeRoot" : "/x",
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.iOS-99-0",
+      "version" : "99.0",
+      "isInternal" : true,
+      "isAvailable" : true,
+      "name" : "iOS 99.0 Internal",
+      "supportedDeviceTypes" : [ ]
+    }
+  ],
+  "devices" : {
+    "com.apple.CoreSimulator.SimRuntime.iOS-17-0" : [
+      {
+        "dataPath" : "/Users/tester/Library/Developer/CoreSimulator/Devices/1A2B3C4D-0000-4000-8000-000000000001/data",
+        "dataPathSize" : 1620578304,
+        "logPath" : "/Users/tester/Library/Logs/CoreSimulator/1A2B3C4D-0000-4000-8000-000000000001",
+        "logPathSize" : 9740288,
+        "udid" : "1A2B3C4D-0000-4000-8000-000000000001",
+        "isAvailable" : true,
+        "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-11",
+        "state" : "Booted",
+        "name" : "iPhone 11"
+      },
+      {
+        "dataPath" : "/Users/tester/Library/Developer/CoreSimulator/Devices/1A2B3C4D-0000-4000-8000-000000000002/data",
+        "dataPathSize" : 512,
+        "logPath" : "/Users/tester/Library/Logs/CoreSimulator/1A2B3C4D-0000-4000-8000-000000000002",
+        "udid" : "1A2B3C4D-0000-4000-8000-000000000002",
+        "isAvailable" : true,
+        "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-11",
+        "state" : "Shutdown",
+        "name" : "iPhone 11 Pro"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-15-5" : [
+      {
+        "dataPath" : "/Users/tester/Library/Developer/CoreSimulator/Devices/1A2B3C4D-0000-4000-8000-000000000003/data",
+        "dataPathSize" : 12345678,
+        "logPath" : "/Users/tester/Library/Logs/CoreSimulator/1A2B3C4D-0000-4000-8000-000000000003",
+        "udid" : "1A2B3C4D-0000-4000-8000-000000000003",
+        "isAvailable" : false,
+        "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-8",
+        "state" : "Shutdown",
+        "name" : "iPhone 8"
+      },
+      {
+        "dataPath" : "/Users/tester/Library/Developer/CoreSimulator/Devices/1A2B3C4D-0000-4000-8000-000000000004/data",
+        "logPath" : "/Users/tester/Library/Logs/CoreSimulator/1A2B3C4D-0000-4000-8000-000000000004",
+        "udid" : "1A2B3C4D-0000-4000-8000-000000000004",
+        "isAvailable" : false,
+        "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPad-Air",
+        "state" : "Shutdown",
+        "name" : "iPad Air"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-13-0" : [ ]
+  },
+  "pairs" : { }
+}
