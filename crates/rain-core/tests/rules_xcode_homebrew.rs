@@ -51,7 +51,7 @@ fn allocated(fs: &StdFs, path: &Path) -> u64 {
     fs.symlink_metadata(path).unwrap().blocks * 512
 }
 
-// FR-002, FR-003, FR-005, FR-007, ADR 0005: with the builtin registry, each
+// With the builtin registry, each
 // DerivedData and Homebrew child is one item, sibling caches and `~/.ssh` are
 // not, and a symlink to `~/.ssh` inside DerivedData is never followed.
 #[test]

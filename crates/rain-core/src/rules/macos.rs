@@ -24,7 +24,7 @@ pub static XCODE_DERIVED_DATA: ChildrenOf = ChildrenOf {
 };
 
 /// FR-002: Homebrew download cache inside `{caches}`. Listed before the
-/// user caches rule so it keeps these bytes (ADR 0005).
+/// user caches rule so it keeps these bytes.
 pub static HOMEBREW_CACHE: ChildrenOf = ChildrenOf {
     meta: RuleMeta {
         id: RuleId::new("pkg.homebrew"),

@@ -124,7 +124,7 @@ fn sensitive_caches_never_default_selected() {
     assert_eq!(meta.risk, Risk::High);
 }
 
-// FR-044: the list reviewed by `seguranca`. Every entry goes to the
+// The list was reviewed entry by entry. Every entry goes to the
 // sensitive rule as one item; the generic rule keeps only ordinary caches.
 #[test]
 fn sensitive_list_reviewed() {

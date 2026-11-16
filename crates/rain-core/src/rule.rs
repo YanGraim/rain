@@ -27,7 +27,7 @@ pub struct RuleMeta {
 }
 
 /// Rule families: files found by walking, or items reported by an
-/// external tool (ADR 0004).
+/// external tool.
 pub enum RuleKind<'a> {
     Files(&'a dyn FileRule),
     Provider(&'a dyn ProviderRule),

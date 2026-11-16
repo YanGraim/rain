@@ -9,7 +9,7 @@ use rain_platform::{Os, Root};
 
 /// `sys.user-caches`: contents of `~/Library/Caches`.
 /// `ms-playwright` is left to `pkg.playwright`, which keeps the newest
-/// browsers (seguranca, AI2f); this low, preselected rule must not offer them.
+/// browsers; this low, preselected rule must not offer them.
 pub static USER_CACHES: ChildrenExcept = ChildrenExcept {
     skip: &["ms-playwright"],
     inner: ChildrenOf {
@@ -317,7 +317,7 @@ total 39936
         );
     }
 
-    // FR-002, NFR-004, ADR 0005: with the whole registry, the bytes under
+    // With the whole registry, the bytes under
     // `~/Library/Caches/Homebrew` belong to the Homebrew rule only. The caches
     // rule keeps the outer folder as an item, measured without that subtree.
     #[test]

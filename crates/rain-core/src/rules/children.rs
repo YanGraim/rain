@@ -450,7 +450,7 @@ mod tests {
         out
     }
 
-    // FR-005: ADR 0005 keeps the outer of two nested roots of one rule, so a
+    // A rule keeps the outer of two nested roots, so a
     // protected outer root would hide the inner one. Built-in rules must not
     // nest or repeat `rels`, and never take a whole base root as one item.
     #[test]

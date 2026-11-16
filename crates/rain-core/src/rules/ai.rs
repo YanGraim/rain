@@ -8,7 +8,7 @@ use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, 
 use rain_platform::{Os, Root};
 use std::path::Path;
 
-// ADR 0005: listed before `sys.user-caches`, so `claude-cli-nodejs` in
+// Listed before `sys.user-caches`, so `claude-cli-nodejs` in
 // `~/Library/Caches` belongs to this rule.
 pub(super) static RULES: &[&dyn Rule] = &[
     &CLAUDE_CODE_CACHE,

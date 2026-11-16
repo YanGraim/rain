@@ -566,7 +566,7 @@ mod tests {
         insta::assert_snapshot!(out);
     }
 
-    // FR-010, E7: labels come from the tool and are untrusted.
+    // Labels come from the tool and are untrusted.
     #[test]
     fn label_from_tool_is_escaped() {
         let mut r = report(vec![]);
@@ -1010,7 +1010,7 @@ mod tests {
         assert_eq!(docker["source"], "tool");
     }
 
-    // FR-021, ADR 0004: tool items carry the tool's figures and no file path,
+    // Tool items carry the tool's figures and no file path,
     // and their bytes are in `tool_total_bytes`, never in `total_bytes`.
     #[test]
     fn tool_items_have_no_path_and_stay_out_of_total_bytes() {

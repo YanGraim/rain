@@ -1,5 +1,5 @@
 //! Built-in rule registry. The order is the priority: when two rules find
-//! the same path, the earlier one keeps it (ADR 0005), so more specific
+//! the same path, the earlier one keeps it, so more specific
 //! rules come first.
 
 mod ai;
@@ -47,7 +47,9 @@ pub fn builtin() -> &'static [&'static dyn Rule] {
     BUILTIN.get_or_init(|| assemble(ORDER))
 }
 
-// FR-014 / ADR 0005
+// Joins the slices in the given order, which is the priority order: the
+// earlier rule keeps a path two rules would both find. A high risk rule that
+// is preselected is a bug: it is demoted (and caught in debug builds).
 fn assemble<'r>(slices: &[&[&'r dyn Rule]]) -> Vec<&'r dyn Rule> {
     slices
         .iter()
@@ -64,7 +66,7 @@ fn assemble<'r>(slices: &[&[&'r dyn Rule]]) -> Vec<&'r dyn Rule> {
         .collect()
 }
 
-// FR-014
+// A rule seen through a different `meta`.
 struct Demoted<'r> {
     inner: &'r dyn Rule,
     meta: RuleMeta,
@@ -79,7 +81,7 @@ impl Rule for Demoted<'_> {
     }
 }
 
-// FR-014 / ADR 0005
+// Same rule with preselection turned off.
 fn demote(rule: &dyn Rule) -> &dyn Rule {
     let meta = RuleMeta {
         default_selected: false,
@@ -169,7 +171,7 @@ mod tests {
         rules.iter().map(|r| r.meta().id.as_str()).collect()
     }
 
-    // FR-008 / ADR 0005: selection keeps the registry (priority) order.
+    // Selection keeps the registry (priority) order.
     #[test]
     fn select_keeps_registry_order() {
         let (z, a) = (named("z.first"), named("a.second"));
@@ -188,7 +190,7 @@ mod tests {
         assert_eq!(err.valid, [RuleId::new("a.second"), RuleId::new("z.first")]);
     }
 
-    // FR-002, ADR 0005: more specific rules come first, so the Homebrew
+    // More specific rules come first, so the Homebrew
     // cache keeps its bytes when the user caches rule also sees them.
     #[test]
     fn homebrew_then_xcode_before_user_caches() {
@@ -329,7 +331,7 @@ mod tests {
         assert_eq!(category("sys.logs"), Category::Logs);
     }
 
-    // FR-001 / ADR 0005: slices are joined in the given order, keeping each
+    // Slices are joined in the given order, keeping each
     // slice's own order.
     #[test]
     fn category_slices_concatenate_in_fixed_order() {
@@ -353,7 +355,7 @@ mod tests {
         }
     }
 
-    // FR-014 / ADR 0005: nothing is dropped, so no item falls to a lower
+    // Nothing is dropped, so no item falls to a lower
     // risk rule.
     #[test]
     fn builtin_keeps_every_rule_in_order() {
@@ -361,7 +363,7 @@ mod tests {
         assert_eq!(builtin().len(), total);
     }
 
-    // FR-014 / ADR 0005: a high risk default selected rule stays in place,
+    // A high risk default selected rule stays in place,
     // keeps its kind and id, and is no longer default selected.
     #[test]
     fn demote_keeps_rule_but_unselects_it() {
@@ -399,7 +401,7 @@ mod tests {
         let _ = assemble(&[&slice]);
     }
 
-    // FR-002 / ADR 0005: the registry order is AI, JS and Python package
+    // The registry order is AI, JS and Python package
     // caches, homebrew, xcode, logs, caches.
     #[test]
     fn builtin_order_is_specific_first() {

@@ -1,4 +1,4 @@
-//! Xcode rules (D1) against the real filesystem. The fixture
+//! Xcode rules against the real filesystem. The fixture
 //! `fixtures/apple` (a fake home) is copied into a tempdir
 //! under `CARGO_TARGET_TMPDIR`; nothing outside it is touched.
 

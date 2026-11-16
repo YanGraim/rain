@@ -1,4 +1,4 @@
-//! AI2f rules against the real filesystem. The fixture
+//! The npx cache and Playwright rules against the real filesystem. The fixture
 //! `fixtures/pkg` (a fake home) is copied into a tempdir
 //! under `CARGO_TARGET_TMPDIR`; nothing outside it is touched.
 
@@ -105,7 +105,7 @@ fn want(list: &[(&str, &str)]) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-// AI2f: npx install cache; one item per cached package set.
+// The npx install cache; one item per cached package set.
 #[test]
 fn npx_found_in_fixture() {
     assert_eq!(
@@ -120,7 +120,7 @@ fn npx_found_in_fixture() {
     assert!(m.default_selected);
 }
 
-// AI2f: only revisions with a newer one of the same browser; .links,
+// Only revisions with a newer one of the same browser; .links,
 // single revisions and unparseable names are kept.
 #[test]
 fn playwright_lists_only_older_revisions() {
@@ -142,7 +142,7 @@ fn playwright_lists_only_older_revisions() {
     assert!(!m.default_selected);
 }
 
-// ADR 0005, seguranca: nothing under ms-playwright comes from
+// Nothing under ms-playwright comes from
 // sys.user-caches (it would offer the newest browsers), and the newest
 // revisions are never listed by any rule.
 #[test]

@@ -129,7 +129,7 @@ impl<'a> Walker<'a> {
 
     /// Like [`Self::measure`], but every path in `excluded` (and what lies
     /// below it) is ignored without being reported as skipped: it belongs to
-    /// another item and is counted there (ADR 0005).
+    /// another item and is counted there.
     pub fn measure_excluding(&mut self, root: &Path, excluded: &BTreeSet<PathBuf>) -> Measure {
         let mut out = Measure::default();
         if self.is_cancelled() {
@@ -421,7 +421,7 @@ impl<'a> Walker<'a> {
             if self.is_cancelled() {
                 return Listing::Cancelled;
             }
-            // Counted by another item; not read, not reported (ADR 0005).
+            // Counted by another item; not read, not reported.
             if excluded.contains(&child.path) {
                 continue;
             }
@@ -1184,7 +1184,7 @@ mod tests {
         rels.iter().map(|r| at(r)).collect()
     }
 
-    // FR-003 (ADR 0005): an excluded subtree belongs to another item, so it
+    // FR-003: an excluded subtree belongs to another item, so it
     // is neither counted nor reported as skipped.
     #[test]
     fn measure_excluding_ignores_subtree_silently() {

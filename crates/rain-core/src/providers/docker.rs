@@ -138,7 +138,7 @@ mod tests {
         );
     }
 
-    // ADR 0004 §3: one bad line makes the whole output unusable.
+    // One bad line makes the whole output unusable.
     #[test]
     fn corrupt_line_is_unavailable() {
         let mut lines: Vec<&str> = DF.lines().collect();
@@ -147,7 +147,7 @@ mod tests {
         assert!(parse_system_df("Cannot connect to the Docker daemon").is_err());
     }
 
-    // ADR 0004 §3: fail closed on missing, repeated or unknown rows and on
+    // Fail closed on missing, repeated or unknown rows and on
     // reclaimable text that does not match.
     #[test]
     fn system_df_rows_are_strict() {
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(got, [("0a1b2c3d4e5f", "0a1b2c3d4e5f", 1_250_000_000, 0)]);
     }
 
-    // ADR 0004 §3: `N/A` means use is unknown; fail closed, not an item.
+    // `N/A` means use is unknown; fail closed, not an item.
     #[test]
     fn dangling_image_unknown_use_is_not_an_item() {
         let line = DANGLING_SYN.lines().nth(1).unwrap();
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(parse_dangling_images(line), Ok(Vec::new()));
     }
 
-    // ADR 0004 §3: ids must be 12 or 64 lower-case hex; anything else fails.
+    // Ids must be 12 or 64 lower-case hex; anything else fails.
     #[test]
     fn dangling_image_bad_fields_fail_closed() {
         let line = DANGLING_SYN.lines().next().unwrap();

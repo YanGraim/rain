@@ -1,4 +1,4 @@
-//! A3/A4 AI tool rules against the real filesystem. The fixtures
+//! The AI tool rules against the real filesystem. The fixtures
 //! `fixtures/ai/{cursor,tools}` (fake homes) is copied into a tempdir
 //! under `CARGO_TARGET_TMPDIR`; nothing outside it is touched.
 
@@ -245,7 +245,7 @@ fn claude_desktop_cache_found_in_fixture() {
     );
 }
 
-// AI2e: keep the newest version per extension (and target); list only the
+// Keep the newest version per extension (and target); list only the
 // older folders. Single versions, extensions.json, .obsolete, unparseable
 // names and any group with an unparseable version are never listed.
 #[test]

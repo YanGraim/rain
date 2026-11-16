@@ -1,4 +1,4 @@
-//! External tool contracts (ADR 0004). The core only describes commands and
+//! External tool contracts. The core only describes commands and
 //! reads their output; running a process is the injected [`ToolRunner`]'s
 //! job, which lives outside the core.
 

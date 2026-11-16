@@ -31,7 +31,7 @@ pub struct ScanContext<'a> {
     pub protect: &'a ProtectList,
     pub roots: &'a ResolvedRoots,
     pub rule_ctx: RuleContext,
-    /// Runs provider probes (ADR 0004).
+    /// Runs provider probes.
     pub tools: &'a dyn ToolRunner,
     /// Worker threads; `None` uses `available_parallelism`. The report is
     /// the same for any value.
@@ -49,7 +49,7 @@ pub enum ScanError {
 /// Runs `rules` (in priority order, as returned by `rules::select`) and
 /// builds a deterministic report, or nothing at all if cancelled (FR-011).
 ///
-/// Two phases (ADR 0005): discovery collects candidates without measuring;
+/// Two phases: discovery collects candidates without measuring;
 /// then the surviving, disjoint items are measured by one walker, in
 /// `(rule id, path)` order, so a shared hardlink lands in the first item.
 pub fn scan(
@@ -201,7 +201,7 @@ fn refuse_holders_of_protected(
 }
 
 /// Phase 1: candidate path -> index of the highest-priority rule that found
-/// it (ADR 0005: equal paths go to the earlier rule).
+/// it (equal paths go to the earlier rule).
 fn discover(
     rules: &[&dyn Rule],
     ctx: &ScanContext,
@@ -292,7 +292,7 @@ fn accept(
         .collect()
 }
 
-/// ADR 0005: one rule never yields nested items. Discovery does not descend
+/// One rule never yields nested items. Discovery does not descend
 /// into a candidate, so this only happens with overlapping roots of one
 /// rule (e.g. two `--path` inside each other); the outer one keeps all.
 fn without_nested(candidates: BTreeSet<PathBuf>) -> Vec<PathBuf> {
@@ -468,7 +468,7 @@ fn unique_keys(items: Vec<ProviderItem>) -> Result<Vec<ProviderItem>, Unavailabl
     }
 }
 
-/// FR-007, ADR 0004 §5: every path a tool names is canonicalized and kept
+/// Every path a tool names is canonicalized and kept
 /// only if unprotected and strictly inside one of the rule's roots. An item
 /// that named paths and kept none is dropped.
 fn check_tool_paths(
@@ -1285,7 +1285,7 @@ mod tests {
         assert_eq!(reasons(&report), vec![SkipReason::UserData]);
     }
 
-    // ADR 0005: the innermost item keeps its bytes; the outer item of another
+    // The innermost item keeps its bytes; the outer item of another
     // rule is measured without that subtree. Alone, the outer rule gets all.
     #[test]
     fn overlapping_rules_count_bytes_once() {
@@ -1322,7 +1322,7 @@ mod tests {
         assert_eq!(alone.total_bytes, both.total_bytes);
     }
 
-    // ADR 0005: the same path found by two rules goes to the one earlier in
+    // The same path found by two rules goes to the one earlier in
     // the registry, even when its id sorts later; the loser still appears.
     #[test]
     fn equal_path_goes_to_higher_priority_rule() {
@@ -1338,7 +1338,7 @@ mod tests {
         );
     }
 
-    // FR-003 / ADR 0005: a hardlinked inode shared by items counts once, in
+    // A hardlinked inode shared by items counts once, in
     // the first item in (rule, path) order, whatever the registry order.
     #[test]
     fn shared_hardlink_goes_to_first_item_in_order() {
@@ -1391,7 +1391,7 @@ mod tests {
         );
     }
 
-    // ADR 0005: one rule never yields nested items; with overlapping roots
+    // One rule never yields nested items; with overlapping roots
     // the outer candidate keeps everything.
     #[test]
     fn same_rule_nested_candidates_keep_outer() {
@@ -1646,7 +1646,7 @@ mod tests {
         assert_eq!(report.total_bytes, 0);
     }
 
-    // ADR 0005: three nested levels from three rules; every byte in exactly
+    // Three nested levels from three rules; every byte in exactly
     // one item, and the total equals the outer rule alone.
     #[test]
     fn three_level_nesting_counts_bytes_once() {
@@ -1769,7 +1769,7 @@ mod tests {
         assert_eq!(totals(&report), vec![("test.empty", 0, 0)]);
     }
 
-    // ADR 0005: two rules sharing one root, one picking items nested in the
+    // Two rules sharing one root, one picking items nested in the
     // other's; bytes counted once and the shared skip listed once.
     #[test]
     fn equal_roots_with_nested_candidates() {

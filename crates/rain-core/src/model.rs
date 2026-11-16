@@ -94,7 +94,7 @@ pub enum ItemSource {
     Tool,
 }
 
-/// One item reported by an external tool (ADR 0004). Its bytes are the
+/// One item reported by an external tool. Its bytes are the
 /// tool's figure and never enter `total_bytes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolItem {
@@ -140,7 +140,7 @@ pub struct ProviderStatus {
 }
 
 /// One candidate found by a rule. Items are disjoint: no byte is counted in
-/// two of them (ADR 0005).
+/// two of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanItem {
     pub id: ItemId,
