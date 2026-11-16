@@ -420,6 +420,9 @@ fn probe_all<'r>(
             return Err(ScanError::Cancelled);
         }
         let call = provider.probe();
+        // The key is the tool and the argv; a probe names no item and keeps
+        // the default time limit (`ToolCall::read`), so nothing else can differ.
+        debug_assert!(call.item_args.is_empty(), "a probe names no item");
         let key = (call.tool, call.args.to_vec());
         let answer = match asked.get(&key) {
             // Identical probes run once; failure and timeout are answers too.
@@ -2212,6 +2215,52 @@ mod tests {
                     ("pkg.homebrew", ToolStatus::Ok),
                 ]
             );
+        }
+
+        // #142: a tool that is not running or not installed is not a timeout:
+        // a probe with another argv still runs, so "docker is stopped" is never
+        // reported as "docker timed out".
+        #[test]
+        fn a_stopped_or_missing_tool_does_not_spend_the_budget() {
+            for error in [
+                ToolError::NotRunning,
+                ToolError::NotInstalled,
+                ToolError::Denied,
+            ] {
+                let first = docker("containers.a", DF);
+                let second = docker("containers.b", INFO);
+                let mut tools = FakeToolRunner::new();
+                tools
+                    .reply(ToolId::Docker, DF, FakeReply::Error(error))
+                    .reply(ToolId::Docker, INFO, ok("info 2"));
+                let report = scan_with(&base(), &[&first as &dyn Rule, &second], &tools);
+                assert_eq!(tools.calls().len(), 2, "{error:?}");
+                assert_eq!(
+                    status(&report),
+                    vec![
+                        ("containers.a", unavailable(error)),
+                        ("containers.b", ToolStatus::Ok),
+                    ],
+                    "{error:?}"
+                );
+            }
+        }
+
+        // #142: a cancelled probe ends the scan and is asked once: it is not
+        // answered again to the other rules, nor kept as an answer.
+        #[test]
+        fn a_cancelled_probe_ends_the_scan_after_one_call() {
+            let rules = five();
+            let tools = replying(ToolId::Docker, FakeReply::Error(ToolError::Cancelled));
+            let result = run_full(
+                &base(),
+                &refs(&rules),
+                &AtomicBool::new(false),
+                Some(1),
+                &tools,
+            );
+            assert!(matches!(result, Err(ScanError::Cancelled)));
+            assert_eq!(tools.calls().len(), 1);
         }
 
         // #142: only a timeout spends the budget; a plain failure of one
