@@ -269,7 +269,7 @@ impl Plan {
             return Err(bad("expires_at"));
         }
         let home = PathBuf::from(text_of(doc, "home")?);
-        if !home.is_absolute() {
+        if !is_canonical_form(&home) {
             return Err(bad("home"));
         }
         let report_hash = hex_of(doc, "report_hash")?;
@@ -514,6 +514,18 @@ fn hex_of(o: &Object, key: &'static str) -> Result<u64, PlanError> {
     u64::from_str_radix(t, 16).map_err(|_| bad(key))
 }
 
+/// An absolute path written the one way the scan writes it: no `..`, no `.`,
+/// no doubled or trailing slash. `starts_with` compares components and
+/// forgives all of those, so the text is checked too.
+fn is_canonical_form(path: &Path) -> bool {
+    use std::path::Component;
+    path.is_absolute()
+        && path
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+        && path.components().collect::<PathBuf>().as_os_str() == path.as_os_str()
+}
+
 fn parse_identity(v: &Value) -> Result<Identity, PlanError> {
     let o = v.as_object().ok_or(bad("identity"))?;
     let kind = match text_of(o, "kind")? {
@@ -552,7 +564,7 @@ fn parse_item(v: &Value, home: &Path) -> Result<PlanItem, PlanError> {
         .find(|id| id.as_str() == rule_name)
         .ok_or(bad("rule"))?;
     let path = PathBuf::from(text_of(o, "path")?);
-    if !path.is_absolute() || !path.starts_with(home) || path == home {
+    if !is_canonical_form(&path) || !path.starts_with(home) || path == home {
         return Err(bad("path"));
     }
     let id = ItemId(hex_of(o, "id")?);
@@ -1416,5 +1428,31 @@ mod tests {
             v["items"][folder]["ancestors"][0]["nlink"] = 1.into();
         })
         .is_err());
+    }
+
+    // The paths in the document are compared by components, which forgive a
+    // `..`, a `.`, a doubled or a trailing slash. A plan that carries one is
+    // refused, even when its ids and hash were made to match.
+    #[test]
+    fn from_json_refuses_paths_that_are_not_in_canonical_form() {
+        assert!(Plan::from_json(&rehashed_json(|_| {})).is_ok());
+        for form in [
+            "/Users/t/Library/Caches/../Caches/com.a",
+            "/Users/t/./Library/Caches/com.a",
+            "/Users/t/Library/Caches/com.a/",
+            "/Users//t/Library/Caches/com.a",
+            "/Users/t/Library/Caches/com.a/.",
+        ] {
+            let json = rehashed_json(|p| {
+                let item = &mut p.items[0];
+                item.path = PathBuf::from(form);
+                item.id = ItemId::of(item.rule, &item.path);
+            });
+            assert!(Plan::from_json(&json).is_err(), "{form}");
+        }
+        for home in ["/Users//t", "/Users/t/", "/Users/./t", "/Users/t/."] {
+            let json = rehashed_json(|p| p.home = PathBuf::from(home));
+            assert!(Plan::from_json(&json).is_err(), "{home}");
+        }
     }
 }
