@@ -154,14 +154,21 @@
 ~/.config/github-copilot/apps.json
 ~/.codex/auth.json
 
-# Cursor and VS Code chat history and editor state, with the WAL and SHM
-# files of the live database (backups next to it are not covered).
+# Cursor and VS Code chat history and editor state, with the WAL, SHM and
+# journal files of the live database and the agent and search databases next to
+# it (backups next to it are not covered).
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-shm
+~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-journal
+~/Library/Application Support/Cursor/User/globalStorage/agent-host.db
+~/Library/Application Support/Cursor/User/globalStorage/conversation-search.db
 ~/Library/Application Support/Code/User/globalStorage/state.vscdb
 ~/Library/Application Support/Code/User/globalStorage/state.vscdb-wal
 ~/Library/Application Support/Code/User/globalStorage/state.vscdb-shm
+~/Library/Application Support/Code/User/globalStorage/state.vscdb-journal
+~/Library/Application Support/Code/User/globalStorage/agent-host.db
+~/Library/Application Support/Code/User/globalStorage/conversation-search.db
 
 # Claude app VM: session data and machine identity (owner decision).
 ~/Library/Application Support/Claude/vm_bundles
