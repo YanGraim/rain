@@ -1789,6 +1789,18 @@ mod engines_tests {
         }
     }
 
+    // ADR 0006: what is in the Trash is already out of the user's way, and an
+    // item that is, holds or sits inside `~/.Trash` would be moved into itself
+    // (or trashed again). No rule lists it and the executor never moves it.
+    #[test]
+    fn the_trash_folder_is_protected() {
+        assert_engine_protected(".Trash");
+        let list = builtin();
+        assert!(list.is_protected(Path::new(HOME).join(".Trash/old file.txt").as_path()));
+        // Only the Trash itself: the home and its other folders are not.
+        assert!(!list.is_protected(Path::new(HOME).join(".Trashes-not").as_path()));
+    }
+
     /// The state files of the Cursor and VS Code global storage that the
     /// protection list names, by file name. The audit below ties this table
     /// to `protected.list` in both directions.

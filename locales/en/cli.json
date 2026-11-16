@@ -178,5 +178,36 @@
   "provider.unavailable.parse": "{tool} returned output Rain could not read",
   "provider.unavailable.io": "{tool} could not be run",
   "provider.unavailable.failed": "{tool} reported an error (is it running?)",
-  "provider.unavailable.simctl": "simctl is not available (the full Xcode is needed, not only the Command Line Tools)"
+  "provider.unavailable.simctl": "simctl is not available (the full Xcode is needed, not only the Command Line Tools)",
+  "help.clean": "Preview what would be moved to the Trash (nothing is changed)",
+  "help.dry-run": "Only show the plan: nothing is moved or deleted (required for now)",
+  "help.item": "Only this item id, as shown by the JSON report (repeatable; default: every item of the preselected rules)",
+  "clean.nothing": "Nothing to clean: no item was selected.",
+  "clean.summary": {
+    "one": "{count} item, {size}",
+    "other": "{count} items, {size}"
+  },
+  "clean.plan": "Plan {hash}, valid for {minutes} minutes",
+  "clean.needs-confirmation": {
+    "one": "{count} item needs your confirmation before it can be cleaned",
+    "other": "{count} items need your confirmation before they can be cleaned"
+  },
+  "clean.needs-app-closed": {
+    "one": "{count} item needs its app closed first; Rain cannot check that yet, so it would be skipped",
+    "other": "{count} items need their app closed first; Rain cannot check that yet, so they would be skipped"
+  },
+  "clean.dry-run-note": "Dry run: nothing was moved or deleted.",
+  "error.invalid-item": "'{item}' is not an item id (16 hexadecimal digits, as shown by the JSON report)",
+  "clean.error.unknown-item": "Item {id} is not in the scan: run it again",
+  "clean.error.tool-item": "Item {id} comes from a tool (Docker, Ollama, simulators): tool items cannot be cleaned yet",
+  "clean.error.excluded": "Item {id} holds an item of another rule, so it is not cleaned whole: choose the inner item",
+  "clean.error.protected": "Item {id} is, or holds, protected data and is never cleaned",
+  "clean.error.trash": "Item {id} is, holds or sits inside the Trash and is never cleaned",
+  "clean.error.non-utf8": "Item {id} has a name Rain cannot write down safely (not valid UTF-8)",
+  "clean.error.gone": "Item {id} is gone: run the scan again",
+  "clean.error.symlink": "Item {id} is a link now: run the scan again",
+  "clean.error.outside-home": "Item {id} is not inside your home folder",
+  "clean.error.unreadable": "Item {id} could not be read",
+  "clean.error.clock": "The system clock is before 1970",
+  "clean.error.other": "The plan could not be made: {reason}"
 }

@@ -9,6 +9,7 @@ use rain_core::model::{
     Category, ExcludedReason, ItemId, ItemSource, Risk, RuleId, ScanReport, SkipReason, ToolStatus,
     Unavailable,
 };
+use rain_core::plan::{Confirmation, Plan, PLAN_TTL_SECS};
 use rain_core::rule::RuleKind;
 use rain_core::rules;
 use rain_core::size::format_decimal;
@@ -84,6 +85,83 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
         out.push_str(&line);
         out.push('\n');
     }
+    out
+}
+
+/// What `rain clean --dry-run` shows: each planned item with its size, how
+/// many need a confirmation or an app closed, the plan id and its window.
+/// Paths come from the disk and are escaped (FR-010).
+pub fn render_plan_preview(plan: &Plan, catalog: &Catalog) -> String {
+    let header = [
+        catalog.get(MessageKey::TableHeaderRule).to_owned(),
+        catalog.get(MessageKey::TableHeaderPath).to_owned(),
+        catalog.get(MessageKey::TableHeaderSize).to_owned(),
+    ];
+    let mut rows = vec![header];
+    let mut total = 0u64;
+    for item in &plan.items {
+        total = total.saturating_add(item.bytes);
+        rows.push([
+            item.rule.as_str().to_owned(),
+            escape_for_terminal(&item.path.to_string_lossy()),
+            format_decimal(item.bytes),
+        ]);
+    }
+    rows.push([
+        catalog.get(MessageKey::TableTotal).to_owned(),
+        String::new(),
+        format_decimal(total),
+    ]);
+    let widths = column_widths(&rows);
+    let mut out = String::new();
+    for row in &rows {
+        push_row(&mut out, row, &widths);
+    }
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    let mut line = |text: String| {
+        out.push_str(&text);
+        out.push('\n');
+    };
+    let items = count(plan.items.len());
+    line(
+        catalog
+            .get_plural(MessageKey::CleanSummary, items)
+            .replace("{count}", &items.to_string())
+            .replace("{size}", &format_decimal(total)),
+    );
+    line(
+        catalog
+            .get(MessageKey::CleanPlan)
+            .replace("{hash}", &format!("{:016x}", plan.plan_hash))
+            .replace("{minutes}", &(PLAN_TTL_SECS / 60).to_string()),
+    );
+    let pending = count(
+        plan.items
+            .iter()
+            .filter(|i| i.confirmation == Confirmation::Pending)
+            .count(),
+    );
+    if pending > 0 {
+        line(
+            catalog
+                .get_plural(MessageKey::CleanNeedsConfirmation, pending)
+                .replace("{count}", &pending.to_string()),
+        );
+    }
+    let apps = count(
+        plan.items
+            .iter()
+            .filter(|i| i.requires_app_closed.is_some())
+            .count(),
+    );
+    if apps > 0 {
+        line(
+            catalog
+                .get_plural(MessageKey::CleanNeedsAppClosed, apps)
+                .replace("{count}", &apps.to_string()),
+        );
+    }
+    line(catalog.get(MessageKey::CleanDryRunNote).to_owned());
     out
 }
 

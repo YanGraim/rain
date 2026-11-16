@@ -178,5 +178,36 @@
   "provider.unavailable.parse": "{tool} devolvió una salida que Rain no pudo leer",
   "provider.unavailable.io": "No se pudo ejecutar {tool}",
   "provider.unavailable.failed": "{tool} informó un error (¿está en ejecución?)",
-  "provider.unavailable.simctl": "simctl no está disponible (hace falta Xcode completo, no solo las Command Line Tools)"
+  "provider.unavailable.simctl": "simctl no está disponible (hace falta Xcode completo, no solo las Command Line Tools)",
+  "help.clean": "Muestra lo que se movería a la Papelera (no se cambia nada)",
+  "help.dry-run": "Solo muestra el plan: no se mueve ni se borra nada (obligatorio por ahora)",
+  "help.item": "Solo este id de elemento, como aparece en el informe JSON (repetible; por defecto: todos los elementos de las reglas preseleccionadas)",
+  "clean.nothing": "Nada que limpiar: no se seleccionó ningún elemento.",
+  "clean.summary": {
+    "one": "{count} elemento, {size}",
+    "other": "{count} elementos, {size}"
+  },
+  "clean.plan": "Plan {hash}, válido durante {minutes} minutos",
+  "clean.needs-confirmation": {
+    "one": "{count} elemento necesita tu confirmación antes de poder limpiarse",
+    "other": "{count} elementos necesitan tu confirmación antes de poder limpiarse"
+  },
+  "clean.needs-app-closed": {
+    "one": "{count} elemento necesita que su app esté cerrada; Rain aún no puede comprobarlo, así que se omitiría",
+    "other": "{count} elementos necesitan que su app esté cerrada; Rain aún no puede comprobarlo, así que se omitirían"
+  },
+  "clean.dry-run-note": "Simulación: no se movió ni se borró nada.",
+  "error.invalid-item": "'{item}' no es un id de elemento (16 dígitos hexadecimales, como en el informe JSON)",
+  "clean.error.unknown-item": "El elemento {id} no está en el análisis: vuelve a ejecutarlo",
+  "clean.error.tool-item": "El elemento {id} viene de una herramienta (Docker, Ollama, simuladores): aún no se pueden limpiar",
+  "clean.error.excluded": "El elemento {id} contiene un elemento de otra regla, así que no se limpia entero: elige el elemento interior",
+  "clean.error.protected": "El elemento {id} es, o contiene, datos protegidos y nunca se limpia",
+  "clean.error.trash": "El elemento {id} es la Papelera, la contiene o está dentro de ella y nunca se limpia",
+  "clean.error.non-utf8": "El elemento {id} tiene un nombre que Rain no puede anotar con seguridad (no es UTF-8 válido)",
+  "clean.error.gone": "El elemento {id} ya no existe: vuelve a ejecutar el análisis",
+  "clean.error.symlink": "El elemento {id} ahora es un enlace: vuelve a ejecutar el análisis",
+  "clean.error.outside-home": "El elemento {id} no está dentro de tu carpeta de inicio",
+  "clean.error.unreadable": "No se pudo leer el elemento {id}",
+  "clean.error.clock": "El reloj del sistema está antes de 1970",
+  "clean.error.other": "No se pudo crear el plan: {reason}"
 }

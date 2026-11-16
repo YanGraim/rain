@@ -4,6 +4,7 @@ pub mod clock;
 pub mod fs;
 pub mod messages;
 pub mod model;
+pub mod plan;
 pub mod planner;
 pub mod protect;
 mod providers;

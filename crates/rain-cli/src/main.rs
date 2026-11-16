@@ -4,12 +4,13 @@ mod args;
 mod output;
 mod tools;
 
-use args::{Command, InvalidPath, OutsideHome, ScanArgs};
+use args::{CleanArgs, Command, InvalidPath, OutsideHome, ScanArgs};
 use output::escape_for_terminal;
 use rain_core::clock::Clock;
 use rain_core::fs::{Fs, StdFs};
 use rain_core::messages::{Catalog, MessageKey};
-use rain_core::model::ScanReport;
+use rain_core::model::{ItemId, RuleId, ScanReport};
+use rain_core::plan::{BuildContext, Confirmations, Plan, PlanError, Selection};
 use rain_core::planner::{self, ResolvedRoots, ScanContext, ScanError};
 use rain_core::protect::{ProtectError, ProtectList};
 use rain_core::rule::{Rule, RuleContext};
@@ -183,6 +184,103 @@ fn scan_output(
     run_scan(args, env, catalog, cancel).and_then(|r| report_text(&r, args.json, catalog))
 }
 
+/// `rain clean --dry-run` (ADR 0006): scans, makes the plan and shows it.
+/// Nothing is moved or deleted: there is no executor yet.
+fn clean_output(
+    args: &CleanArgs,
+    env: &Env,
+    catalog: &Catalog,
+    cancel: &AtomicBool,
+) -> Result<String, CliError> {
+    let ids = args
+        .items
+        .iter()
+        .map(|raw| parse_item_id(raw, catalog))
+        .collect::<Result<Vec<_>, _>>()?;
+    let report = run_scan(&args.scan_args(), env, catalog, cancel)?;
+    // No `--item`: what the preselected (low risk) rules found.
+    let ids = if ids.is_empty() {
+        let preselected: Vec<RuleId> = report
+            .rules
+            .iter()
+            .filter(|r| r.default_selected)
+            .map(|r| r.rule)
+            .collect();
+        report
+            .items
+            .iter()
+            .filter(|i| preselected.contains(&i.rule))
+            .map(|i| i.id)
+            .collect()
+    } else {
+        ids
+    };
+    if ids.is_empty() {
+        return Ok(format!("{}\n", catalog.get(MessageKey::CleanNothing)));
+    }
+    let home = env
+        .platform
+        .resolve(Root::Home)
+        .map_err(|e| CliError::Runtime(home_error_message(&e, catalog)))?;
+    let protect = ProtectList::builtin(env.platform)
+        .map_err(|e| CliError::Runtime(protect_error_message(&e, catalog)))?
+        .with_identities(env.fs);
+    let ctx = BuildContext {
+        fs: env.fs,
+        protect: &protect,
+        clock: env.clock,
+        home: &home,
+    };
+    // A dry run: what needs a confirmation is marked, not asked for.
+    let selection = Selection {
+        ids,
+        ..Selection::default()
+    };
+    let plan = Plan::build(&report, &selection, Confirmations::Preview, &ctx)
+        .map_err(|e| CliError::Runtime(plan_error_message(&e, catalog)))?;
+    if args.json {
+        Ok(format!("{}\n", plan.to_json()))
+    } else {
+        Ok(output::render_plan_preview(&plan, catalog))
+    }
+}
+
+/// An item id as the JSON report prints it: 16 hexadecimal digits.
+fn parse_item_id(raw: &str, catalog: &Catalog) -> Result<ItemId, CliError> {
+    if raw.len() == 16 && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Ok(n) = u64::from_str_radix(raw, 16) {
+            return Ok(ItemId(n));
+        }
+    }
+    Err(CliError::Usage(
+        catalog
+            .get(MessageKey::InvalidItem)
+            .replace("{item}", &escape_for_terminal(raw)),
+    ))
+}
+
+/// One localized message for each reason a plan was refused.
+fn plan_error_message(e: &PlanError, catalog: &Catalog) -> String {
+    let with_id =
+        |key: MessageKey, id: u64| catalog.get(key).replace("{id}", &format!("{id:016x}"));
+    match e {
+        PlanError::UnknownItem(id) => with_id(MessageKey::CleanErrorUnknownItem, *id),
+        PlanError::ToolItem(id) => with_id(MessageKey::CleanErrorToolItem, *id),
+        PlanError::HasExcludedSubtree(id) => with_id(MessageKey::CleanErrorExcluded, *id),
+        PlanError::Protected(id) => with_id(MessageKey::CleanErrorProtected, *id),
+        PlanError::TrashInvolved(id) => with_id(MessageKey::CleanErrorTrash, *id),
+        PlanError::NonUtf8Path(id) => with_id(MessageKey::CleanErrorNonUtf8, *id),
+        PlanError::Gone(id) => with_id(MessageKey::CleanErrorGone, *id),
+        PlanError::Symlink(id) => with_id(MessageKey::CleanErrorSymlink, *id),
+        PlanError::OutsideHome(id) => with_id(MessageKey::CleanErrorOutsideHome, *id),
+        PlanError::Unreadable(id) => with_id(MessageKey::CleanErrorUnreadable, *id),
+        PlanError::ClockBeforeEpoch => catalog.get(MessageKey::CleanErrorClock).to_owned(),
+        other => catalog
+            .get(MessageKey::CleanErrorOther)
+            .replace("{reason}", &escape_for_terminal(&other.to_string())),
+    }
+}
+
 /// FR-008: no `--rule` means every built-in rule.
 fn select_rules(ids: &[String], catalog: &Catalog) -> Result<Vec<&'static dyn Rule>, CliError> {
     if ids.is_empty() {
@@ -249,7 +347,7 @@ fn main() -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::from(u8::try_from(code).unwrap_or(EXIT_USAGE)));
         }
     };
-    let Some(Command::Scan(scan)) = cli.command else {
+    let Some(command) = cli.command else {
         print!("{}", args::help(&catalog));
         return Ok(ExitCode::SUCCESS);
     };
@@ -266,7 +364,10 @@ fn main() -> anyhow::Result<ExitCode> {
             tools: &tools,
             cwd,
         };
-        scan_output(&scan, &env, &catalog, &cancel)
+        match &command {
+            Command::Scan(scan) => scan_output(scan, &env, &catalog, &cancel),
+            Command::Clean(clean) => clean_output(clean, &env, &catalog, &cancel),
+        }
     });
     match result {
         Ok(text) => {
@@ -344,7 +445,7 @@ mod tests {
         full.extend_from_slice(argv);
         match args::parse(&catalog, full).unwrap().command {
             Some(Command::Scan(a)) => a,
-            None => panic!("no subcommand"),
+            _ => panic!("not a scan"),
         }
     }
 
@@ -715,6 +816,246 @@ mod tests {
                 reason: SkipReason::Protected,
             }]
         );
+    }
+
+    // `rain clean --dry-run` (ADR 0006): the plan, shown and not run.
+    mod clean_dry_run {
+        use super::*;
+        use rain_core::messages::Locale;
+        use rain_core::plan::{Confirmation, Plan};
+        use std::path::Path;
+
+        fn dir(fs: &mut FakeFs, rel: &str, ino: u64) {
+            fs.insert(h(rel), meta(true, ino, 0));
+        }
+
+        /// The usual home plus a Go module cache (medium risk) and an Xcode
+        /// archive (high risk, needs Xcode closed).
+        fn fs_with_medium_and_high() -> FakeFs {
+            let mut fs = home_fs();
+            dir(&mut fs, "go", 20);
+            dir(&mut fs, "go/pkg", 21);
+            dir(&mut fs, "go/pkg/mod", 22);
+            dir(&mut fs, "go/pkg/mod/cache", 23);
+            fs.insert(h("go/pkg/mod/cache/x"), meta(false, 24, 4));
+            dir(&mut fs, "Library/Developer", 30);
+            dir(&mut fs, "Library/Developer/Xcode", 31);
+            dir(&mut fs, "Library/Developer/Xcode/Archives", 32);
+            dir(&mut fs, "Library/Developer/Xcode/Archives/2024-01-01", 33);
+            dir(
+                &mut fs,
+                "Library/Developer/Xcode/Archives/2024-01-01/App.xcarchive",
+                34,
+            );
+            fs.insert(
+                h("Library/Developer/Xcode/Archives/2024-01-01/App.xcarchive/blob"),
+                meta(false, 35, 16),
+            );
+            fs
+        }
+
+        fn clean_args(argv: &[&str]) -> CleanArgs {
+            let catalog = Catalog::en().unwrap();
+            let mut full = vec!["rain", "clean", "--dry-run"];
+            full.extend_from_slice(argv);
+            match args::parse(&catalog, full).unwrap().command {
+                Some(Command::Clean(a)) => a,
+                _ => panic!("not a clean"),
+            }
+        }
+
+        fn clean_with(
+            argv: &[&str],
+            fs: &FakeFs,
+            platform: &FakePlatform,
+            catalog: &Catalog,
+        ) -> Result<String, CliError> {
+            let env = Env {
+                platform,
+                fs,
+                clock: &clock(),
+                tools: &rain_core::tools::NoTools,
+                cwd: PathBuf::from(HOME),
+            };
+            clean_output(&clean_args(argv), &env, catalog, &AtomicBool::new(false))
+        }
+
+        fn clean(argv: &[&str]) -> Result<String, CliError> {
+            clean_with(
+                argv,
+                &fs_with_medium_and_high(),
+                &platform(Some(HOME)),
+                &Catalog::en().unwrap(),
+            )
+        }
+
+        fn id_of(rule: &str, tail: &str) -> String {
+            let report = run_with(
+                &["--rule", rule],
+                &fs_with_medium_and_high(),
+                &platform(Some(HOME)),
+            )
+            .unwrap();
+            let item = report
+                .items
+                .iter()
+                .find(|i| i.path.ends_with(tail))
+                .unwrap_or_else(|| panic!("no {tail} under {rule}"));
+            format!("{:016x}", item.id.0)
+        }
+
+        // The preselected rules (low risk) are planned; nothing else.
+        #[test]
+        fn dry_run_previews_the_preselected_items() {
+            let out = clean(&["--rule", "sys.logs", "--rule", "sys.user-caches"]).unwrap();
+            insta::assert_snapshot!(out);
+        }
+
+        // Medium and high items are not planned unless asked for by id, and
+        // then they wait for a confirmation.
+        #[test]
+        fn items_that_need_a_decision_are_not_planned_unless_chosen() {
+            let rules = ["--rule", "pkg.go-mod", "--rule", "sys.logs"];
+            let out = clean(&rules).unwrap();
+            assert!(out.contains("old.log"), "{out}");
+            assert!(!out.contains("go/pkg/mod"), "{out}");
+            assert!(!out.contains("needs your confirmation"), "{out}");
+
+            let go = id_of("pkg.go-mod", "cache");
+            let mut chosen = rules.to_vec();
+            chosen.extend(["--item", go.as_str()]);
+            let out = clean(&chosen).unwrap();
+            assert!(out.contains("go/pkg/mod/cache"), "{out}");
+            assert!(!out.contains("old.log"), "{out}");
+            assert!(
+                out.contains("1 item needs your confirmation before it can be cleaned"),
+                "{out}"
+            );
+        }
+
+        // An app that must be closed is announced, also in a dry run.
+        #[test]
+        fn items_that_need_an_app_closed_are_announced() {
+            let archive = id_of("apple.archives", "App.xcarchive");
+            let out = clean(&["--rule", "apple.archives", "--item", &archive]).unwrap();
+            assert!(out.contains("1 item needs its app closed first"), "{out}");
+            assert!(out.contains("1 item needs your confirmation"), "{out}");
+        }
+
+        // `--json` is the plan itself, and it reads back as the same plan.
+        #[test]
+        fn json_is_a_plan_that_reads_back_and_is_stable() {
+            let argv = ["--rule", "sys.logs", "--rule", "pkg.go-mod", "--json"];
+            let go = id_of("pkg.go-mod", "cache");
+            let mut chosen = argv.to_vec();
+            chosen.extend(["--item", go.as_str()]);
+            let first = clean(&chosen).unwrap();
+            let plan = Plan::from_json(&first).expect("a plan");
+            assert_eq!(plan.items.len(), 1);
+            assert_eq!(plan.items[0].confirmation, Confirmation::Pending);
+            assert_eq!(plan.created_at, 1_800_000_000);
+            assert_eq!(plan.home, Path::new(HOME));
+            // Same disk, same clock: the same document.
+            assert_eq!(clean(&chosen).unwrap(), first);
+        }
+
+        #[test]
+        fn nothing_selected_says_so_and_succeeds() {
+            let out = clean(&["--rule", "pkg.go-mod"]).unwrap();
+            assert_eq!(out.trim_end(), "Nothing to clean: no item was selected.");
+        }
+
+        #[test]
+        fn bad_item_ids_are_refused() {
+            for bad in [
+                "",
+                "ff",
+                "xyz",
+                "00000000000000FG",
+                "00000000000000000",
+                "+0000000000000001",
+            ] {
+                match clean(&["--rule", "sys.logs", "--item", bad]) {
+                    Err(CliError::Usage(msg)) => {
+                        assert!(msg.contains("is not an item id"), "{bad}: {msg}")
+                    }
+                    other => panic!("{bad:?}: {other:?}"),
+                }
+            }
+            match clean(&["--rule", "sys.logs", "--item", "00000000000000aa"]) {
+                Err(CliError::Runtime(msg)) => assert!(msg.contains("is not in the scan"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+        }
+
+        // An item the user cannot choose: the protected `~/.ssh` is never in
+        // the scan, so its id is not in the report either.
+        #[test]
+        fn a_protected_folder_cannot_be_planned_by_id() {
+            let ssh = rain_core::model::ItemId::of(
+                rain_core::model::RuleId::new("sys.user-caches"),
+                &h(".ssh"),
+            );
+            let bad = format!("{:016x}", ssh.0);
+            match clean(&["--rule", "sys.user-caches", "--item", &bad]) {
+                Err(CliError::Runtime(msg)) => assert!(msg.contains("is not in the scan"), "{msg}"),
+                other => panic!("{other:?}"),
+            }
+        }
+
+        #[test]
+        fn root_is_refused_like_a_scan() {
+            let root = FakePlatform {
+                home: Some(PathBuf::from(HOME)),
+                root: true,
+                os: Os::Macos,
+            };
+            let out = clean_with(
+                &["--rule", "sys.logs"],
+                &home_fs(),
+                &root,
+                &Catalog::en().unwrap(),
+            );
+            assert!(matches!(out, Err(CliError::Runtime(_))), "{out:?}");
+        }
+
+        #[test]
+        fn the_preview_is_translated() {
+            for (locale, note) in [
+                (Locale::Es, "Simulación: no se movió ni se borró nada."),
+                (Locale::PtBr, "Simulação: nada foi movido nem apagado."),
+            ] {
+                let catalog = Catalog::for_locale(locale).unwrap();
+                let out = clean_with(
+                    &["--rule", "sys.logs"],
+                    &fs_with_medium_and_high(),
+                    &platform(Some(HOME)),
+                    &catalog,
+                )
+                .unwrap();
+                assert!(out.contains(note), "{out}");
+            }
+        }
+
+        // The path comes from the disk: controls and bidi are shown escaped.
+        #[test]
+        fn hostile_names_are_escaped_in_the_preview() {
+            let mut fs = home_fs();
+            let bidi = char::from_u32(0x202e).unwrap();
+            let name = format!("Library/Logs/a{bidi}b\u{1b}[31m.log");
+            fs.insert(h(&name), meta(false, 40, 2));
+            let out = clean_with(
+                &["--rule", "sys.logs"],
+                &fs,
+                &platform(Some(HOME)),
+                &Catalog::en().unwrap(),
+            )
+            .unwrap();
+            for bad in ['\x1b', bidi] {
+                assert!(!out.contains(bad), "{out:?}");
+            }
+            assert!(out.contains("a\\u{202e}b\\x1b[31m.log"), "{out}");
+        }
     }
 
     // The simulator, Podman and Ollama rules through the table, with fake
