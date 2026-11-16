@@ -8,6 +8,7 @@
   "table.header.path": "Caminho",
   "table.header.size": "Tamanho",
   "table.total": "Total",
+  "table.size-unknown": "tamanho desconhecido",
   "table.skipped": {
     "one": "{count} item ignorado",
     "other": "{count} itens ignorados"
@@ -176,5 +177,6 @@
   "provider.unavailable.denied": "{tool} não pôde ser executado com segurança",
   "provider.unavailable.parse": "{tool} devolveu uma saída que o Rain não conseguiu ler",
   "provider.unavailable.io": "Não foi possível executar o {tool}",
-  "provider.unavailable.failed": "{tool} informou um erro (está em execução?)"
+  "provider.unavailable.failed": "{tool} informou um erro (está em execução?)",
+  "provider.unavailable.simctl": "simctl não está disponível (é preciso o Xcode completo, não só as Command Line Tools)"
 }

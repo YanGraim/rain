@@ -801,9 +801,9 @@ mod tests {
         }
 
         // The Command Line Tools have `xcrun` but no `simctl`: it exits with
-        // an error, and the table names Xcode.
+        // an error, and the table says what is missing.
         #[test]
-        fn xcrun_without_simctl_is_named_xcode_in_the_table() {
+        fn xcrun_without_simctl_says_what_is_missing_in_the_table() {
             let mut tools = FakeToolRunner::new();
             tools.reply(
                 ToolId::Xcrun,
@@ -815,7 +815,12 @@ mod tests {
                 }),
             );
             let out = table(&tools);
-            assert!(out.contains("Xcode"), "{out}");
+            assert!(
+                out.lines().any(|l| l
+                    == "simctl is not available (the full Xcode is needed, not only the Command Line Tools)"),
+                "{out}"
+            );
+            assert!(!out.contains("is it running"), "{out}");
             assert!(out.contains("Ollama is not installed"), "{out}");
             assert!(out.contains("Podman is not installed"), "{out}");
             assert!(!out.contains("Docker"), "{out}");

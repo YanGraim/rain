@@ -39,7 +39,13 @@ pub fn render_table(report: &ScanReport, catalog: &Catalog) -> String {
             item.rule.as_str().to_owned(),
             // The label comes from the tool: untrusted (FR-010).
             escape_for_terminal(&item.label),
-            format_decimal(item.reported_bytes),
+            // A tool that reports no size gives 0 (runtimes, simulators
+            // without a data size): say so instead of "0 B".
+            if item.reported_bytes == 0 {
+                catalog.get(MessageKey::TableSizeUnknown).to_owned()
+            } else {
+                format_decimal(item.reported_bytes)
+            },
         ]);
     }
     rows.push([
@@ -141,11 +147,18 @@ fn unavailable_lines(report: &ScanReport, catalog: &Catalog) -> Vec<String> {
         .iter()
         .filter_map(|p| match p.status {
             ToolStatus::Ok => None,
-            ToolStatus::Unavailable(why) => Some(
-                catalog
-                    .get(unavailable_key(why))
-                    .replace("{tool}", tool_name(p.rule)),
-            ),
+            ToolStatus::Unavailable(why) => {
+                let tool = tool_of(p.rule);
+                // `xcrun` that fails is the Command Line Tools without
+                // `simctl`: say what is missing, not "is it running?".
+                let key = match (why, tool) {
+                    (Unavailable::Failed, Some(ToolId::Xcrun)) => {
+                        MessageKey::ProviderUnavailableSimctl
+                    }
+                    _ => unavailable_key(why),
+                };
+                Some(catalog.get(key).replace("{tool}", tool_name(tool, p.rule)))
+            }
         })
         .collect();
     lines.sort();
@@ -169,15 +182,19 @@ fn unavailable_key(why: Unavailable) -> MessageKey {
     }
 }
 
-/// Product names, not translated.
-fn tool_name(rule: RuleId) -> &'static str {
-    let tool = rules::builtin()
+/// The tool a provider rule asks.
+fn tool_of(rule: RuleId) -> Option<ToolId> {
+    rules::builtin()
         .iter()
         .find(|r| r.meta().id == rule)
         .and_then(|r| match r.kind() {
             RuleKind::Provider(p) => Some(p.probe().tool),
             RuleKind::Files(_) => None,
-        });
+        })
+}
+
+/// Product names, not translated.
+fn tool_name(tool: Option<ToolId>, rule: RuleId) -> &'static str {
     match tool {
         Some(ToolId::Docker) => "Docker",
         Some(ToolId::Podman) => "Podman",
@@ -632,6 +649,89 @@ mod tests {
             assert!(!out.contains(bad), "{out:?}");
         }
         assert!(out.contains("img\\x1b]52"), "{out}");
+    }
+
+    fn tool_item(rule: &'static str, key: &str, bytes: u64) -> rain_core::model::ToolItem {
+        rain_core::model::ToolItem {
+            id: ItemId::of_key(RuleId::new(rule), key),
+            rule: RuleId::new(rule),
+            key: key.into(),
+            label: key.into(),
+            reported_bytes: bytes,
+            paths: Vec::new(),
+        }
+    }
+
+    // A tool that reports no size (a simulator runtime, a simulator without
+    // data size) gives 0: the table says the size is unknown instead of "0 B".
+    #[test]
+    fn unknown_tool_size_is_not_shown_as_zero_bytes() {
+        let mut r = report(vec![]);
+        r.tool_items = vec![
+            tool_item("apple.sim-runtimes", "runtime-a", 0),
+            tool_item("models.ollama", "model-b", 2_000_000_000),
+        ];
+        r.tool_total_bytes = 2_000_000_000;
+        for (catalog, text) in [
+            (Catalog::en().unwrap(), "size unknown"),
+            (
+                Catalog::for_locale(Locale::Es).unwrap(),
+                "tamaño desconocido",
+            ),
+            (
+                Catalog::for_locale(Locale::PtBr).unwrap(),
+                "tamanho desconhecido",
+            ),
+        ] {
+            let out = render_table(&r, &catalog);
+            let line = |name: &str| {
+                out.lines()
+                    .find(|l| l.contains(name))
+                    .unwrap_or_else(|| panic!("{name} missing in {out}"))
+                    .to_owned()
+            };
+            assert!(line("runtime-a").ends_with(text), "{out}");
+            assert!(!line("runtime-a").contains("0 B"), "{out}");
+            assert!(line("model-b").ends_with("2.0 GB"), "{out}");
+        }
+    }
+
+    fn failed(rule: &'static str) -> rain_core::model::ProviderStatus {
+        rain_core::model::ProviderStatus {
+            rule: RuleId::new(rule),
+            status: ToolStatus::Unavailable(Unavailable::Failed),
+        }
+    }
+
+    // `xcrun` without `simctl` (only the Command Line Tools) exits with an
+    // error; saying "is it running?" would be wrong, so the table says what
+    // is missing. Other tools keep their wording.
+    #[test]
+    fn xcrun_failure_says_simctl_is_not_available() {
+        let mut r = report(vec![]);
+        r.providers = vec![failed("apple.sim-runtimes"), failed("containers.volumes")];
+        for (catalog, simctl, docker) in [
+            (
+                Catalog::en().unwrap(),
+                "simctl is not available (the full Xcode is needed, not only the Command Line Tools)",
+                "Docker reported an error (is it running?)",
+            ),
+            (
+                Catalog::for_locale(Locale::Es).unwrap(),
+                "simctl no está disponible (hace falta Xcode completo, no solo las Command Line Tools)",
+                "Docker informó un error (¿está en ejecución?)",
+            ),
+            (
+                Catalog::for_locale(Locale::PtBr).unwrap(),
+                "simctl não está disponível (é preciso o Xcode completo, não só as Command Line Tools)",
+                "Docker informou um erro (está em execução?)",
+            ),
+        ] {
+            let out = render_table(&r, &catalog);
+            assert!(out.lines().any(|l| l == simctl), "{out}");
+            assert!(out.lines().any(|l| l == docker), "{out}");
+            assert!(!out.contains("Xcode reported"), "{out}");
+        }
     }
 
     // FR-010: escaping is injective, so distinct paths print differently.
