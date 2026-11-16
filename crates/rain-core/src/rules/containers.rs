@@ -4,6 +4,7 @@
 
 use crate::model::{Category, Risk, RuleId};
 use crate::providers::docker::{parse_dangling_images, parse_system_df, SystemDf};
+use crate::providers::podman::{self, PodmanDf};
 use crate::rule::{ProviderRule, Rule, RuleKind, RuleMeta};
 use crate::tools::{ParseError, ProviderItem, ToolCall, ToolId, ToolOutput};
 use rain_platform::Os;
@@ -21,12 +22,17 @@ const DANGLING: ToolCall = ToolCall::read(
     ],
 );
 
+const PODMAN_DF: ToolCall = ToolCall::read(ToolId::Podman, &["system", "df", "--format", "json"]);
+
 pub(super) static RULES: &[&dyn Rule] = &[
     &BUILD_CACHE,
     &DANGLING_IMAGES,
     &STOPPED,
     &UNUSED_IMAGES,
     &VOLUMES,
+    &PODMAN_UNUSED_IMAGES,
+    &PODMAN_STOPPED,
+    &PODMAN_VOLUMES,
 ];
 
 const fn meta(
@@ -173,3 +179,78 @@ impl ProviderRule for DanglingImages {
         Some(UNUSED_IMAGES.meta.id)
     }
 }
+
+// --- Podman, through `podman system df --format json` ----------------------------------
+
+/// One `podman system df` row as a single item; 0 reclaimable = no item.
+struct PodmanRow {
+    meta: RuleMeta,
+    key: &'static str,
+    pick: fn(&PodmanDf) -> u64,
+}
+
+impl Rule for PodmanRow {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Provider(self)
+    }
+}
+
+impl ProviderRule for PodmanRow {
+    fn probe(&self) -> ToolCall {
+        PODMAN_DF
+    }
+    fn parse(&self, out: &ToolOutput) -> Result<Vec<ProviderItem>, ParseError> {
+        let bytes = (self.pick)(&podman::parse_system_df(&out.stdout)?);
+        Ok((bytes > 0)
+            .then(|| ProviderItem {
+                key: self.key.to_owned(),
+                label: self.key.to_owned(),
+                reported_bytes: bytes,
+                paths: Vec::new(),
+            })
+            .into_iter()
+            .collect())
+    }
+    fn act(&self, _: &ProviderItem) -> Option<ToolCall> {
+        None
+    }
+}
+
+/// FR-021: images no container uses.
+static PODMAN_UNUSED_IMAGES: PodmanRow = PodmanRow {
+    meta: meta(
+        "containers.podman-unused-images",
+        "rule.containers.podman-unused-images",
+        "rule.containers.podman-unused-images.consequence",
+        Risk::Medium,
+    ),
+    key: "unused-images",
+    pick: |df| df.images,
+};
+
+/// FR-021: only stopped containers count as reclaimable.
+static PODMAN_STOPPED: PodmanRow = PodmanRow {
+    meta: meta(
+        "containers.podman-stopped",
+        "rule.containers.podman-stopped",
+        "rule.containers.podman-stopped.consequence",
+        Risk::Medium,
+    ),
+    key: "stopped",
+    pick: |df| df.containers,
+};
+
+/// FR-014: volumes may hold databases: high, never preselected.
+static PODMAN_VOLUMES: PodmanRow = PodmanRow {
+    meta: meta(
+        "containers.podman-volumes",
+        "rule.containers.podman-volumes",
+        "rule.containers.podman-volumes.consequence",
+        Risk::High,
+    ),
+    key: "unused-volumes",
+    pick: |df| df.volumes,
+};

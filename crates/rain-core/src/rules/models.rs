@@ -8,10 +8,21 @@
 
 use crate::fs::Fs;
 use crate::model::{Category, Risk, RuleId};
-use crate::rule::{EntryInfo, FileRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit};
+use crate::providers::ollama::parse_list;
+use crate::rule::{
+    EntryInfo, FileRule, ProviderRule, RootedPath, Rule, RuleContext, RuleKind, RuleMeta, Visit,
+};
+use crate::tools::{ParseError, ProviderItem, ToolCall, ToolId, ToolOutput};
 use rain_platform::{Os, Root};
 
-pub(super) static RULES: &[&dyn Rule] = &[&HUGGINGFACE, &TORCH_HUB, &WHISPER, &LMSTUDIO, &GPT4ALL];
+pub(super) static RULES: &[&dyn Rule] = &[
+    &OLLAMA,
+    &HUGGINGFACE,
+    &TORCH_HUB,
+    &WHISPER,
+    &LMSTUDIO,
+    &GPT4ALL,
+];
 
 /// What an entry at the item depth has to be to count as a model.
 enum Pick {
@@ -174,6 +185,47 @@ pub static GPT4ALL: ModelItems = ModelItems {
     rels: &["Library/Application Support/nomic.ai/GPT4All"],
     depth: 1,
     pick: Pick::FileExt(".gguf"),
+};
+
+// --- Ollama, through `ollama list` -------------------------------------------------------
+
+/// Items the tool reports, not files: `act` stays `None` until the M2 spec.
+struct Ollama {
+    meta: RuleMeta,
+}
+
+/// One fixed read-only command.
+const OLLAMA_LIST: ToolCall = ToolCall::read(ToolId::Ollama, &["list"]);
+
+impl Rule for Ollama {
+    fn meta(&self) -> &RuleMeta {
+        &self.meta
+    }
+    fn kind(&self) -> RuleKind<'_> {
+        RuleKind::Provider(self)
+    }
+}
+
+impl ProviderRule for Ollama {
+    fn probe(&self) -> ToolCall {
+        OLLAMA_LIST
+    }
+    fn parse(&self, out: &ToolOutput) -> Result<Vec<ProviderItem>, ParseError> {
+        parse_list(&out.stdout)
+    }
+    fn act(&self, _: &ProviderItem) -> Option<ToolCall> {
+        None
+    }
+}
+
+/// Each model is one item with the size the tool prints. Removing it goes
+/// through the tool (M2), never through the files under `~/.ollama`.
+static OLLAMA: Ollama = Ollama {
+    meta: meta(
+        "models.ollama",
+        "rule.models.ollama",
+        "rule.models.ollama.consequence",
+    ),
 };
 
 #[cfg(test)]
