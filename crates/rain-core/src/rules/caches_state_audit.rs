@@ -104,6 +104,13 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
         "com.sibersystems.RoboFormMac/db",
     ),
     ("com.nordsec.nordpass", "com.nordsec.nordpass/db"),
+    // JetBrains keeps the local history of edited files under
+    // `<Product><Version>/LocalHistory`; the format has no wildcard in the
+    // middle of a path, so the whole folder is protected (and refused whole).
+    (
+        "JetBrains",
+        "JetBrains/IntelliJIdea2025.1/LocalHistory/changes.storageData",
+    ),
 ];
 
 /// Children owned by `sys.sensitive-caches` (high, not preselected): sign-in
@@ -340,18 +347,88 @@ fn hatch_and_pdm_are_refused_with_or_without_an_environment() {
     }
 }
 
+/// First component below `~/Library/Caches/` of every protected entry of the
+/// list text, written in any case. A line that mentions that folder in a form
+/// other than the canonical one is an error, so it cannot slip past the audit.
+fn caches_children(list: &str) -> Result<BTreeSet<String>, String> {
+    const CANONICAL: &str = "~/Library/Caches/";
+    let mut out = BTreeSet::new();
+    for line in list.lines().map(str::trim) {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let lower = line.to_lowercase();
+        if lower.starts_with(&CANONICAL.to_lowercase()) {
+            if !line.starts_with(CANONICAL) {
+                return Err(format!("not the canonical spelling: {line}"));
+            }
+            if let Some(first) = line[CANONICAL.len()..].split('/').next() {
+                out.insert(first.to_owned());
+            }
+        } else if lower.contains("library/caches") {
+            return Err(format!(
+                "mentions the caches folder in another form: {line}"
+            ));
+        }
+    }
+    Ok(out)
+}
+
+// The audit parser reads canonical entries, ignores comments, and refuses an
+// entry that spells the caches folder in another case or form.
+#[test]
+fn audit_parser_reads_canonical_entries_and_rejects_other_spellings() {
+    let ok = "# comment about ~/Library/Caches/ignored\n~/Library/Caches/a.b\n~/Library/Caches/c/d\n/x\n";
+    let got = caches_children(ok).unwrap();
+    assert_eq!(got.into_iter().collect::<Vec<_>>(), vec!["a.b", "c"]);
+    for bad in [
+        "~/library/caches/zzz.new",
+        "~/LIBRARY/CACHES/zzz",
+        "/Users/x/Library/Caches/zzz",
+        "~/Library/caches/zzz",
+    ] {
+        assert!(caches_children(bad).is_err(), "{bad}");
+    }
+}
+
+// #167: the local history of JetBrains IDEs is the user's, in any product and
+// version; the folder holding it is refused whole, with or without it.
+#[test]
+fn jetbrains_caches_are_refused_whole() {
+    for inside in [
+        "JetBrains/IntelliJIdea2025.1/LocalHistory/changes.storageData",
+        "JetBrains/PyCharm2024.3/LocalHistory/changes.storageData",
+        "JetBrains/WebStorm2025.2/caches/index",
+    ] {
+        let mut fs = fixture(&["com.example.app"]);
+        let mut ino = 9500;
+        put(&mut fs, inside, &mut ino);
+        let report = run(&fs);
+        assert!(
+            report
+                .items
+                .iter()
+                .all(|i| !i.path.starts_with(child("JetBrains"))),
+            "{inside} was offered: {:?}",
+            report.items
+        );
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.path == child("JetBrains") && s.reason == SkipReason::Protected),
+            "{inside}: {:?}",
+            report.skipped
+        );
+    }
+}
+
 // The audit table and the lists say the same: every `~/Library/Caches/<x>`
 // entry of the protection list is in the table, and the table has nothing
 // the list does not protect; the sensitive rule owns exactly the others.
 #[test]
 fn table_matches_the_protection_list_and_the_sensitive_rule() {
-    let listed: BTreeSet<String> = include_str!("../protected.list")
-        .lines()
-        .map(str::trim)
-        .filter_map(|l| l.strip_prefix("~/Library/Caches/"))
-        .filter_map(|rest| rest.split('/').next())
-        .map(str::to_owned)
-        .collect();
+    let listed = caches_children(include_str!("../protected.list")).unwrap();
     let table: BTreeSet<String> = PROTECTED_STATE
         .iter()
         .map(|(n, _)| (*n).to_owned())

@@ -1644,6 +1644,48 @@ mod engines_tests {
         assert!(!builtin().is_protected(&g.join("state.vscdb.bak-1")));
     }
 
+    // #131: the live database of Cursor and VS Code (chat history, editor
+    // state) and its WAL and SHM files are protected: they hold the data
+    // that has not reached the main file yet.
+    #[test]
+    fn cursor_state_wal_and_shm_are_protected() {
+        for name in ["state.vscdb-wal", "state.vscdb-shm"] {
+            assert_engine_protected(&format!(
+                "Library/Application Support/Cursor/User/globalStorage/{name}"
+            ));
+        }
+    }
+
+    #[test]
+    fn vscode_state_vscdb_wal_and_shm_are_protected() {
+        for name in ["state.vscdb", "state.vscdb-wal", "state.vscdb-shm"] {
+            assert_engine_protected(&format!(
+                "Library/Application Support/Code/User/globalStorage/{name}"
+            ));
+        }
+    }
+
+    // #131: a folder that holds those files is never a candidate either, and
+    // the backup siblings stay unprotected for both editors.
+    #[test]
+    fn folder_holding_state_files_is_refused_and_backups_are_not_protected() {
+        for editor in ["Cursor", "Code"] {
+            let g = Path::new(HOME)
+                .join("Library/Application Support")
+                .join(editor)
+                .join("User/globalStorage");
+            for spelling in variants(&g.to_string_lossy()) {
+                assert!(
+                    builtin().contains_protected(Path::new(&spelling)),
+                    "{spelling}"
+                );
+            }
+            assert!(!builtin().is_protected(&g.join("state.vscdb.backup")));
+            assert!(!builtin().is_protected(&g.join("state.vscdb.bak-1")));
+            assert!(!builtin().is_protected(&g.join("storage.json")));
+        }
+    }
+
     // FR-004, FR-007: the whole Claude app VM folder (sessions, identity).
     #[test]
     fn claude_vm_bundles_is_protected() {

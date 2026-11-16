@@ -59,6 +59,10 @@
 # refused whole.
 ~/Library/Caches/hatch/env
 ~/Library/Caches/pdm/venvs
+# JetBrains IDEs keep the local history of edited files (the user's work) under
+# <Product><Version>/LocalHistory. This format has no wildcard in the middle of a
+# path, so the whole folder is protected, and refused whole as a candidate.
+~/Library/Caches/JetBrains
 # Downloads in flight (URLSession background transfers) are kept by the
 # system until they finish; removing them breaks the transfer.
 ~/Library/Caches/com.apple.nsurlsessiond
@@ -150,8 +154,14 @@
 ~/.config/github-copilot/apps.json
 ~/.codex/auth.json
 
-# Cursor chat history and editor state (backups next to it are not covered).
+# Cursor and VS Code chat history and editor state, with the WAL and SHM
+# files of the live database (backups next to it are not covered).
 ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
+~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal
+~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-shm
+~/Library/Application Support/Code/User/globalStorage/state.vscdb
+~/Library/Application Support/Code/User/globalStorage/state.vscdb-wal
+~/Library/Application Support/Code/User/globalStorage/state.vscdb-shm
 
 # Claude app VM: session data and machine identity (owner decision).
 ~/Library/Application Support/Claude/vm_bundles
