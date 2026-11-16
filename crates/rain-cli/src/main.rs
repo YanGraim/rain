@@ -717,6 +717,111 @@ mod tests {
         );
     }
 
+    // The simulator, Podman and Ollama rules through the table, with fake
+    // runners: names a user or a repository chose never reach the terminal raw.
+    mod new_provider_tables {
+        use super::*;
+        use rain_core::tools::{
+            ExitStatusKind, FakeReply, FakeToolRunner, ToolError, ToolId, ToolOutput,
+        };
+
+        const SIMCTL: &[&str] = &["simctl", "list", "-j"];
+        const OLLAMA: &[&str] = &["list"];
+        const PODMAN: &[&str] = &["system", "df", "--format", "json"];
+        const SIM_LIST: &str = include_str!("../../rain-core/tests/fixtures/simctl/list.json");
+        const OLLAMA_LIST: &str = include_str!("../../rain-core/tests/fixtures/ollama/list.txt");
+        const RULES: [&str; 6] = [
+            "apple.sim-unavailable",
+            "apple.sim-runtimes",
+            "models.ollama",
+            "containers.podman-unused-images",
+            "containers.podman-stopped",
+            "containers.podman-volumes",
+        ];
+
+        fn table(tools: &FakeToolRunner) -> String {
+            let fs = home_fs();
+            let p = platform(Some(HOME));
+            let env = Env {
+                platform: &p,
+                fs: &fs,
+                clock: &clock(),
+                tools,
+                cwd: PathBuf::from(HOME),
+            };
+            let argv: Vec<&str> = RULES.iter().flat_map(|id| ["--rule", id]).collect();
+            scan_output(
+                &args(&argv),
+                &env,
+                &Catalog::en().unwrap(),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        }
+
+        fn ok(s: &str) -> FakeReply {
+            FakeReply::Output(ToolOutput::success(s))
+        }
+
+        // Simulator names are free text. This one holds a bidi override and
+        // a terminal escape sequence (written as JSON escapes).
+        #[test]
+        fn simulator_name_with_bidi_and_controls_is_escaped_in_the_table() {
+            let hostile = SIM_LIST.replace(
+                "\"name\" : \"iPhone 8\"",
+                "\"name\" : \"iPhone\\u202eevil\\u001b[31m\"",
+            );
+            assert_ne!(hostile, SIM_LIST, "the fixture has the name to replace");
+            let mut tools = FakeToolRunner::new();
+            tools.reply(ToolId::Xcrun, SIMCTL, ok(&hostile));
+            let out = table(&tools);
+            for bad in ['\x1b', '\u{202e}', '\r', '\x07'] {
+                assert!(!out.contains(bad), "{out:?}");
+            }
+            assert!(
+                out.contains("iPhone\\u{202e}evil\\x1b[31m (iOS-15-5)"),
+                "{out}"
+            );
+        }
+
+        // Simulators and models show with the tool's sizes, and the tool that
+        // is not installed says so; the scan still succeeds.
+        #[test]
+        fn table_with_new_providers_ok_and_unavailable() {
+            let mut tools = FakeToolRunner::new();
+            tools
+                .reply(ToolId::Xcrun, SIMCTL, ok(SIM_LIST))
+                .reply(ToolId::Ollama, OLLAMA, ok(OLLAMA_LIST))
+                .reply(
+                    ToolId::Podman,
+                    PODMAN,
+                    FakeReply::Error(ToolError::NotInstalled),
+                );
+            insta::assert_snapshot!(table(&tools));
+        }
+
+        // The Command Line Tools have `xcrun` but no `simctl`: it exits with
+        // an error, and the table names Xcode.
+        #[test]
+        fn xcrun_without_simctl_is_named_xcode_in_the_table() {
+            let mut tools = FakeToolRunner::new();
+            tools.reply(
+                ToolId::Xcrun,
+                SIMCTL,
+                FakeReply::Output(ToolOutput {
+                    status: ExitStatusKind::Code(72),
+                    stdout: String::new(),
+                    stderr_len: 80,
+                }),
+            );
+            let out = table(&tools);
+            assert!(out.contains("Xcode"), "{out}");
+            assert!(out.contains("Ollama is not installed"), "{out}");
+            assert!(out.contains("Podman is not installed"), "{out}");
+            assert!(!out.contains("Docker"), "{out}");
+        }
+    }
+
     mod provider_table {
         use super::*;
         use rain_core::tools::{

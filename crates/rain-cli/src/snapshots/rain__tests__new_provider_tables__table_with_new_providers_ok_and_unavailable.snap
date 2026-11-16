@@ -1,0 +1,17 @@
+---
+source: crates/rain-cli/src/main.rs
+expression: table(&tools)
+---
+Rule                   Path                         Size
+apple.sim-runtimes     iOS 15.5                      0 B
+apple.sim-runtimes     iOS 17.0                      0 B
+apple.sim-unavailable  iPhone 8 (iOS-15-5)       12.3 MB
+apple.sim-unavailable  iPad Air (iOS-15-5)           0 B
+models.ollama          llama3.2:latest            2.0 GB
+models.ollama          nomic-embed-text:latest  274.0 MB
+models.ollama          qwen2.5-coder:7b           4.7 GB
+models.ollama          user/custom-model:q4_0     1.5 kB
+Total                                                0 B
+Inside tools                                      7.0 GB
+Reported by the tool itself. Freeing it may not free the same space on your disk.
+Podman is not installed
