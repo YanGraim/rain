@@ -1292,4 +1292,129 @@ mod tests {
         }
         assert!(Plan::from_json(&format!("{} trailing", good)).is_err());
     }
+
+    // A path that is not on the list but names the same inode as a protected
+    // folder (a hardlink, a bind) is as protected as the folder.
+    #[test]
+    fn an_alias_of_a_protected_folder_is_refused() {
+        let mut fx = fixture();
+        fx.fs
+            .insert("/Users/t/.ssh", md(true, 20, 2))
+            .insert("/Users/t/Library/Caches/alias", md(true, 20, 2));
+        fx.protect = ProtectList::builtin(&HomeAt)
+            .unwrap()
+            .with_identities(&fx.fs);
+        let mut r = report();
+        let alias = scan_item(CACHES, "/Users/t/Library/Caches/alias", 1);
+        r.items.push(alias.clone());
+        assert_eq!(
+            build_with(&fx, &r, &select(&[alias.id]), Confirmations::Required),
+            Err(PlanError::Protected(alias.id.0))
+        );
+    }
+
+    // Only what a rule left out of ITS OWN item counts against that item.
+    #[test]
+    fn an_exclusion_of_another_rule_does_not_refuse_the_item() {
+        let fx = fixture();
+        let mut r = report();
+        r.excluded.push(Excluded {
+            rule: NPM,
+            path: PathBuf::from("/Users/t/Library/Caches/com.a/inner"),
+            kept_by: CACHES,
+            reason: ExcludedReason::InsideItem,
+        });
+        let a = id(CACHES, "/Users/t/Library/Caches/com.a");
+        assert!(build_with(&fx, &r, &select(&[a]), Confirmations::Required).is_ok());
+    }
+
+    #[test]
+    fn a_file_in_the_middle_of_the_path_is_not_a_folder() {
+        let mut fx = fixture();
+        fx.fs
+            .insert("/Users/t/Library/Caches/afile", md(false, 70, 1))
+            .insert("/Users/t/Library/Caches/afile/inner", md(true, 71, 2));
+        let mut r = report();
+        let deep = scan_item(CACHES, "/Users/t/Library/Caches/afile/inner", 1);
+        r.items.push(deep.clone());
+        assert_eq!(
+            build_with(&fx, &r, &select(&[deep.id]), Confirmations::Required),
+            Err(PlanError::Unreadable(deep.id.0))
+        );
+    }
+
+    /// A plan with a folder item, a folder item and a file item.
+    fn rich_plan() -> Plan {
+        let fx = fixture();
+        let sel = Selection {
+            ids: vec![
+                id(CACHES, "/Users/t/Library/Caches/com.a"),
+                id(CACHES, "/Users/t/Library/Caches/com.b"),
+                id(NPM, "/Users/t/.npm/_cacache/log.txt"),
+            ],
+            ..Selection::default()
+        };
+        build_with(&fx, &report(), &sel, Confirmations::Required).unwrap()
+    }
+
+    /// The JSON of `plan` after `change`, with the hash made to match: only
+    /// the change itself can make it refuse.
+    fn rehashed_json(change: impl Fn(&mut Plan)) -> String {
+        let mut plan = rich_plan();
+        change(&mut plan);
+        plan.plan_hash = plan_hash(&plan.items);
+        plan.to_json()
+    }
+
+    #[test]
+    fn json_with_a_matching_hash_is_still_refused_for_a_wrong_id_or_order() {
+        assert!(Plan::from_json(&rehashed_json(|_| {})).is_ok());
+        // An id that is not the one of the rule and the path.
+        let wrong_id = rehashed_json(|p| p.items[0].id = ItemId(1));
+        assert!(Plan::from_json(&wrong_id).is_err());
+        // The same item twice.
+        let twice = rehashed_json(|p| {
+            let again = p.items[0].clone();
+            p.items.insert(1, again);
+        });
+        assert!(Plan::from_json(&twice).is_err());
+        // Items out of order.
+        let swapped = rehashed_json(|p| p.items.swap(0, 1));
+        assert!(Plan::from_json(&swapped).is_err());
+    }
+
+    // The link count belongs to files only; ancestors are folders.
+    #[test]
+    fn json_with_an_identity_that_does_not_fit_its_kind_is_refused() {
+        let good: serde_json::Value = serde_json::from_str(&rich_plan().to_json()).unwrap();
+        let edit = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v = good.clone();
+            f(&mut v);
+            Plan::from_json(&v.to_string())
+        };
+        let file = good["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|i| i["identity"]["kind"] == "file")
+            .expect("a file item");
+        let folder = good["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|i| i["identity"]["kind"] == "dir")
+            .expect("a folder item");
+        assert!(edit(&|_| {}).is_ok());
+        // A folder with a link count, a file without one.
+        assert!(edit(&|v| v["items"][folder]["identity"]["nlink"] = 3.into()).is_err());
+        assert!(
+            edit(&|v| v["items"][file]["identity"]["nlink"] = serde_json::Value::Null).is_err()
+        );
+        // An ancestor that is not a folder.
+        assert!(edit(&|v| {
+            v["items"][folder]["ancestors"][0]["kind"] = "file".into();
+            v["items"][folder]["ancestors"][0]["nlink"] = 1.into();
+        })
+        .is_err());
+    }
 }
