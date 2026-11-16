@@ -288,6 +288,7 @@ mod tests {
     const CACHES: RuleId = RuleId::new("sys.user-caches");
     const LOGS: RuleId = RuleId::new("sys.logs");
     const RUST_TARGET: RuleId = RuleId::new("proj.rust-target");
+    const NODE_MODULES: RuleId = RuleId::new("proj.node-modules");
 
     struct HomeAt;
 
@@ -342,6 +343,11 @@ mod tests {
             f("/Users/t/.claude.json", 60),
             d("/Users/t/.claude", 50),
             d("/Users/t/.claude/projects", 51),
+            d("/Users/t/.claude/futuro", 52),
+            d("/Users/t/.claude/futuro/node_modules", 53),
+            f("/Users/t/.claude/futuro/package.json", 54),
+            d("/Users/t/.codex", 80),
+            d("/Users/t/.codex/sessions", 81),
             d("/Users/t/proj", 30),
             f("/Users/t/proj/Cargo.toml", 31),
             f("/Users/t/proj/src.rs", 32),
@@ -601,6 +607,30 @@ mod tests {
         );
     }
 
+    // User data outside `~/.claude` is on the list by name.
+    #[test]
+    fn user_data_outside_the_claude_folder_is_refused_by_name() {
+        let fs = world();
+        let sessions = item_of(&fs, CACHES, "/Users/t/.codex/sessions");
+        assert_eq!(check(&fs, &sessions), Outcome::Stop(Stop::UserData));
+    }
+
+    // A scan never enters `~/.claude` for a project rule; a plan that names
+    // a folder there (made by hand, or stale) is stopped, not just skipped.
+    #[test]
+    fn a_folder_under_the_claude_home_is_stopped_even_if_no_list_names_it() {
+        let fs = world();
+        let item = item_of(&fs, NODE_MODULES, "/Users/t/.claude/futuro/node_modules");
+        assert!(
+            matches!(
+                check(&fs, &item),
+                Outcome::Stop(Stop::UserData) | Outcome::Stop(Stop::Protected)
+            ),
+            "{:?}",
+            check(&fs, &item)
+        );
+    }
+
     // The rule has to claim the path the way a scan would: the descent from
     // its root, folder by folder, then the item.
     #[test]
@@ -664,6 +694,22 @@ mod tests {
         // A link inside, even to a protected folder, is a name: moved, not followed.
         let links = fs_of(&entries(), &[(&format!("{COM_A}/to-ssh"), "/Users/t/.ssh")]);
         assert_eq!(check(&links, &item), Outcome::Clear);
+    }
+
+    // A folder that is a link is a name inside the item: it is moved with it
+    // and never read through.
+    #[test]
+    fn a_link_to_a_folder_inside_the_item_is_not_read_through() {
+        let item = item_of(&world(), CACHES, COM_A);
+        let mut e = entries();
+        let link = Metadata {
+            is_symlink: true,
+            ..md(true, 90, 2, 7, 200)
+        };
+        e.push((format!("{COM_A}/dirlink"), link));
+        // What the link would lead to, if it were followed.
+        e.push((format!("{COM_A}/dirlink/alias"), md(true, 20, 2, 7, 200)));
+        assert_eq!(check(&fs_of(&e, &[]), &item), Outcome::Clear);
     }
 
     #[test]
