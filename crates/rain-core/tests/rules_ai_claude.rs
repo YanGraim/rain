@@ -120,7 +120,7 @@ fn claude_cache_lists_snapshots_and_cache_dirs() {
 }
 
 // Acceptance criterion 12: the CLI cache content goes to the Claude rule.
-// As with Homebrew (ADR 0005), `sys.user-caches` keeps at most the emptied
+// As with Homebrew, `sys.user-caches` keeps at most the emptied
 // folder itself, with no file of the Claude cache in it.
 #[test]
 fn claude_cli_nodejs_not_in_user_caches() {

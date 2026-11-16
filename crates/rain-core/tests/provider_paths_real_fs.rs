@@ -1,4 +1,4 @@
-// FR-007, ADR 0004 §5: paths named by a tool, checked on a real (temp) FS.
+// Paths named by a tool, checked on a real (temp) FS.
 #![cfg(unix)]
 #![allow(clippy::disallowed_methods)]
 

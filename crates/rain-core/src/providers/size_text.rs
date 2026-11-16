@@ -52,7 +52,7 @@ mod tests {
         assert_eq!(parse_decimal_size("1.0005kB"), Ok(1_000));
     }
 
-    // ADR 0004 §3: fail closed on anything else.
+    // Fail closed on anything else.
     #[test]
     fn rejects_unknown_size_text() {
         for bad in [

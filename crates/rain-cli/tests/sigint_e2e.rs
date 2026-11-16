@@ -42,7 +42,7 @@ fn real_sigint_mid_scan_exits_130_with_empty_stdout() {
     // Baseline: the scan itself must take long enough to be interrupted.
     let t = Instant::now();
     let full = Command::new(env!("CARGO_BIN_EXE_rain"))
-        // File rules only: tests never run real Docker (ADR 0004).
+        // File rules only: tests never run real Docker.
         .args(["scan", "--rule", "sys.user-caches"])
         .env("HOME", dir.path())
         .env_remove("SUDO_UID")
@@ -53,7 +53,7 @@ fn real_sigint_mid_scan_exits_130_with_empty_stdout() {
     assert!(!full.stdout.is_empty());
 
     let child = Command::new(env!("CARGO_BIN_EXE_rain"))
-        // File rules only: tests never run real Docker (ADR 0004).
+        // File rules only: tests never run real Docker.
         .args(["scan", "--rule", "sys.user-caches"])
         .env("HOME", dir.path())
         .env_remove("SUDO_UID")

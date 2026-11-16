@@ -1,4 +1,4 @@
-//! Container engines through the Docker CLI (ADR 0004). Bytes live inside
+//! Container engines through the Docker CLI. Bytes live inside
 //! the engine's virtual disk, so only the tool reports them (FR-020, FR-021).
 //! `act` is `None` everywhere until the M2 spec.
 

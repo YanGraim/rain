@@ -1,4 +1,4 @@
-//! E3: Docker provider rules through the planner with `FakeToolRunner` and
+//! Docker provider rules through the planner with `FakeToolRunner` and
 //! output recorded from the real CLI. Docker is never run.
 
 use rain_core::fs::{FakeFs, Fs};
@@ -133,7 +133,7 @@ fn docker_rules_report_recorded_output() {
     assert_eq!(report.total_bytes, 0);
 }
 
-// ADR 0004 §3: only the two fixed read-only argv are ever asked for.
+// Only the two fixed read-only argv are ever asked for.
 #[test]
 fn probes_are_fixed_read_only_commands() {
     let tools = fake(ok(DF), ok(DANGLING));
@@ -203,7 +203,7 @@ fn docker_not_running_is_unavailable() {
     );
 }
 
-// ADR 0004 §3: corrupt output is unavailable, never guessed around.
+// Corrupt output is unavailable, never guessed around.
 #[test]
 fn corrupt_output_is_unavailable() {
     let report = run(&fake(ok("{\"Type\":"), ok("garbage")));

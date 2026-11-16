@@ -5,7 +5,7 @@ use crate::model::{Category, Risk, RuleId};
 use crate::rule::{Rule, RuleMeta};
 use rain_platform::{Os, Root};
 
-// ADR 0005: listed before `sys.user-caches`, so these folders belong to
+// Listed before `sys.user-caches`, so these folders belong to
 // this high-risk rule and never show up as ordinary, preselected caches.
 pub(super) static RULES: &[&dyn Rule] = &[&SENSITIVE_CACHES];
 

@@ -52,7 +52,7 @@ pub static NPM: ChildrenOf = ChildrenOf {
     depth: 1,
 };
 
-/// AI2f: npx install cache (`~/.npm/_npx/<hash>`: package.json and
+/// The npx install cache (`~/.npm/_npx/<hash>`: package.json and
 /// node_modules). npx downloads them again on the next run.
 pub static NPX: ChildrenOf = ChildrenOf {
     meta: pkg_meta(
@@ -66,10 +66,10 @@ pub static NPX: ChildrenOf = ChildrenOf {
     depth: 1,
 };
 
-/// AI2f: Playwright browsers in `{caches}/ms-playwright`, named
+/// Playwright browsers in `{caches}/ms-playwright`, named
 /// `<browser>-<revision>`. Only revisions with a newer one of the same
 /// browser are items; the newest stays. Listed before the user caches rule
-/// so it keeps those bytes (ADR 0005).
+/// so it keeps those bytes.
 pub static PLAYWRIGHT: OldRevisions = OldRevisions {
     meta: pkg_meta(
         "pkg.playwright",
@@ -158,7 +158,7 @@ impl FileRule for OldRevisions {
 }
 
 /// FR-001 (6.4): Yarn classic (in `{caches}`) and Yarn Berry caches.
-/// Listed before the user caches rule so it keeps those bytes (ADR 0005).
+/// Listed before the user caches rule so it keeps those bytes.
 pub static YARN: ChildrenOfRoots = ChildrenOfRoots {
     meta: pkg_meta(
         "pkg.yarn",
@@ -199,7 +199,7 @@ pub static PNPM: ChildrenOf = ChildrenOf {
 // --- Python ---------------------------------------------------------------
 
 /// FR-001 (6.4): pip cache. Listed before the user caches rule so it keeps
-/// those bytes (ADR 0005).
+/// those bytes.
 pub static PIP: ChildrenOf = ChildrenOf {
     meta: pkg_meta(
         "pkg.pip",
@@ -464,7 +464,7 @@ mod tests {
         }
     }
 
-    // ADR 0005: the bytes of the Yarn cache inside `{caches}` belong to
+    // The bytes of the Yarn cache inside `{caches}` belong to
     // pkg.yarn; the user caches item for the folder excludes them.
     #[test]
     fn yarn_inside_caches_goes_to_yarn() {
@@ -610,7 +610,7 @@ mod tests {
         }
     }
 
-    // ADR 0005: the pip bytes inside `{caches}` belong to pkg.pip; the user
+    // The pip bytes inside `{caches}` belong to pkg.pip; the user
     // caches item for the folder excludes them.
     #[test]
     fn pip_inside_caches_goes_to_pip() {

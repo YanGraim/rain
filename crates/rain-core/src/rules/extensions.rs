@@ -1,4 +1,4 @@
-//! AI2e: older versions of editor extensions. Each folder is
+//! Older versions of editor extensions. Each folder is
 //! `publisher.name-MAJOR.MINOR.PATCH[-target]`; the newest one per
 //! (extension, target) is kept. Anything not understood fails closed.
 
@@ -211,7 +211,7 @@ pub(super) static CURSOR_OLD_EXTENSIONS: OldExtensions = OldExtensions {
 mod tests {
     use super::*;
 
-    // AI2e: parsing is strict.
+    // Parsing is strict.
     #[test]
     fn parses_names() {
         assert_eq!(
@@ -456,7 +456,7 @@ mod tests {
         }
     }
 
-    // AI2e: numeric, not lexical, comparison; single versions are kept.
+    // Numeric, not lexical, comparison; single versions are kept.
     #[test]
     fn only_strictly_older_versions() {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();

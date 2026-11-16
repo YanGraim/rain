@@ -1,5 +1,5 @@
 //! Bridges the core's [`ToolRunner`] to the real process runner in
-//! `rain-platform` (ADR 0004 §4). Only maps types; all the safety lives in
+//! `rain-platform`. Only maps types; all the safety lives in
 //! `ProcessToolRunner`.
 
 use rain_core::tools::{ExitStatusKind, ToolCall, ToolError, ToolId, ToolOutput, ToolRunner};
@@ -79,7 +79,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    // ADR 0004 §3: argv is passed literally, binary from the fixed list.
+    // Argv is passed literally, binary from the fixed list.
     #[test]
     fn request_keeps_argv_and_fixed_candidates() {
         let call = ToolCall {

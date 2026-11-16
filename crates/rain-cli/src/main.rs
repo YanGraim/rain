@@ -65,7 +65,7 @@ struct Env<'a> {
     platform: &'a dyn Platform,
     fs: &'a dyn Fs,
     clock: &'a dyn Clock,
-    /// Runs external tools for provider rules (ADR 0004).
+    /// Runs external tools for provider rules.
     tools: &'a dyn ToolRunner,
     /// Base for relative `--path` values.
     cwd: PathBuf,
@@ -775,7 +775,7 @@ mod tests {
             fake
         }
 
-        // FR-021, E7: container items appear with the tool's sizes; their
+        // Container items appear with the tool's sizes; their
         // total is separate from the disk total.
         #[test]
         fn table_with_docker_items() {

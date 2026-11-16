@@ -1,4 +1,4 @@
-//! Real external-tool runner (ADR 0004 §3, §4). The only place in Rain that
+//! Real external-tool runner. The only place in Rain that
 //! spawns processes. No shell, fixed argv, binary from a fixed allowlist,
 //! clean environment, null stdin, timeout, bounded stdout, and the whole
 //! process group is killed on timeout, cancel or overflow.
@@ -171,7 +171,7 @@ impl ProcessToolRunner {
             path.push(":");
             path.push(dir);
         }
-        // The one sanctioned spawn in Rain (ADR 0004 §4): absolute,
+        // The one sanctioned spawn in Rain: absolute,
         // allowlisted binary, literal argv, no shell.
         #[allow(clippy::disallowed_methods)]
         let mut cmd = Command::new(bin);

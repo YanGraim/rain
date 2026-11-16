@@ -1,5 +1,5 @@
 // FR-007, NFR-005: edge cases for refusing an item whose measurement
-// skipped a protected entry (H1c). In-memory FakeFs only: no real disk.
+// skipped a protected entry. In-memory FakeFs only: no real disk.
 #![cfg(unix)]
 
 use rain_core::fs::{FakeFs, Fs, Metadata};
