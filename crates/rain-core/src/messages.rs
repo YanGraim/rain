@@ -229,6 +229,7 @@ pub const CATALOGUE_RULE_IDS: &[&str] = &[
     "ai.codex.cache",
     "ai.gemini.cache",
     "ai.aider.cache",
+    "ai.aider.tags-cache",
     "ai.continue.cache",
     "models.ollama",
     "models.lmstudio",

@@ -61,6 +61,8 @@
   "rule.ai.gemini.cache.consequence": "Você pode perder checkpoints de sessão e não poderá restaurar essas sessões.",
   "rule.ai.aider.cache": "Aider: caches",
   "rule.ai.aider.cache.consequence": "O Aider refaz os caches na próxima execução. Seu histórico de chat não é tocado.",
+  "rule.ai.aider.tags-cache": "Aider: cache do mapa do repo em projetos antigos",
+  "rule.ai.aider.tags-cache.consequence": "O Aider recria o cache do mapa do repo na próxima vez que rodar nesse projeto. Seu histórico de chat não é tocado.",
   "rule.ai.continue.cache": "Continue: índice",
   "rule.ai.continue.cache.consequence": "O Continue reindexa seu código sozinho, o que leva um tempo.",
   "rule.models.ollama": "Ollama",

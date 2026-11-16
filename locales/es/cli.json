@@ -61,6 +61,8 @@
   "rule.ai.gemini.cache.consequence": "Puedes perder puntos de control de sesión y no podrás restaurar esas sesiones.",
   "rule.ai.aider.cache": "Aider: cachés",
   "rule.ai.aider.cache.consequence": "Aider reconstruye sus cachés en la próxima ejecución. Tu historial de chat no se toca.",
+  "rule.ai.aider.tags-cache": "Aider: caché del mapa del repo en proyectos antiguos",
+  "rule.ai.aider.tags-cache.consequence": "Aider reconstruye la caché del mapa del repo la próxima vez que se ejecute en ese proyecto. Tu historial de chat no se toca.",
   "rule.ai.continue.cache": "Continue: índice",
   "rule.ai.continue.cache.consequence": "Continue vuelve a indexar tu código solo, lo que tarda un poco.",
   "rule.models.ollama": "Ollama",

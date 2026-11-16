@@ -18,6 +18,7 @@ pub static RUST_TARGET: ProjectArtifact = ProjectArtifact {
         os: &[Os::Macos],
     },
     dir_names: &["target"],
+    numbered_prefix: None,
     marker: Some("Cargo.toml"),
     inner_marker: None,
     // FR-016: takes `--min-age-days` (30 by default).
@@ -40,6 +41,7 @@ pub static VENV: ProjectArtifact = ProjectArtifact {
         os: &[Os::Macos],
     },
     dir_names: &[".venv", "venv"],
+    numbered_prefix: None,
     marker: None,
     inner_marker: Some("pyvenv.cfg"),
     min_age_days: None,
@@ -61,13 +63,39 @@ pub static BUILD_DIST: ProjectArtifact = ProjectArtifact {
         os: &[Os::Macos],
     },
     dir_names: &["dist"],
+    numbered_prefix: None,
     marker: Some("package.json"),
     inner_marker: None,
     min_age_days: None,
     age_walk_budget: 200_000,
 };
 
-pub(super) static RULES: &[&dyn Rule] = &[&RUST_TARGET, &VENV, &BUILD_DIST];
+/// `ai.aider.tags-cache`: Aider's repo map cache, a folder
+/// `.aider.tags.cache.v<N>` (`aider/repomap.py`: `CACHE_VERSION`, 3 or 4)
+/// that Aider creates in the folder it runs in and itself deletes and
+/// recreates when it is damaged. Only the folder with a digits-only version is
+/// taken: never `.aider.chat.history.md` or `.aider.input.history` (what the
+/// user wrote), and nothing else near the name.
+pub static AIDER_TAGS_CACHE: ProjectArtifact = ProjectArtifact {
+    meta: RuleMeta {
+        id: RuleId::new("ai.aider.tags-cache"),
+        category: Category::AiTools,
+        risk: Risk::Low,
+        name_key: "rule.ai.aider.tags-cache",
+        consequence_key: "rule.ai.aider.tags-cache.consequence",
+        default_selected: true,
+        requires_app_closed: None,
+        os: &[Os::Macos],
+    },
+    dir_names: &[],
+    numbered_prefix: Some(".aider.tags.cache.v"),
+    marker: None,
+    inner_marker: None,
+    min_age_days: None,
+    age_walk_budget: 200_000,
+};
+
+pub(super) static RULES: &[&dyn Rule] = &[&RUST_TARGET, &VENV, &BUILD_DIST, &AIDER_TAGS_CACHE];
 
 #[cfg(test)]
 mod tests {
@@ -201,7 +229,7 @@ mod tests {
         }
 
         /// `d` folder, `f` file, `l` symlink; the age is in days.
-        fn load(lines: &[(&str, u64, &str)]) -> FakeFs {
+        pub(super) fn load(lines: &[(&str, u64, &str)]) -> FakeFs {
             let md = |kind: &str, ino: u64, days: u64| Metadata {
                 is_dir: kind == "d",
                 is_symlink: kind == "l",
@@ -221,7 +249,7 @@ mod tests {
             fs
         }
 
-        fn listed(fs: &FakeFs, rule: &'static dyn Rule) -> Vec<String> {
+        pub(super) fn listed(fs: &FakeFs, rule: &'static dyn Rule) -> Vec<String> {
             let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(fs);
             let roots = ResolvedRoots {
                 home: PathBuf::from(HOME),
@@ -394,6 +422,115 @@ mod tests {
                 ("f", 0, "p/.venv/pyvenv.cfg"),
             ]);
             assert!(listed(&fs, &VENV).is_empty());
+        }
+    }
+
+    mod aider_tags {
+        use super::super::{AIDER_TAGS_CACHE, RULES};
+        use super::venv_dist::{listed, load};
+        use crate::model::Risk;
+        use crate::rule::Rule;
+        use rain_platform::Os;
+
+        // FR-016: the repo map cache is a folder `.aider.tags.cache.v<N>` at
+        // the root of the project Aider ran in.
+        #[test]
+        fn aider_tags_cache_found_in_inactive_project() {
+            let fs = load(&[
+                ("d", 90, "p"),
+                ("f", 90, "p/main.py"),
+                ("d", 0, "p/.aider.tags.cache.v3"),
+                ("f", 0, "p/.aider.tags.cache.v3/cache.db"),
+                ("d", 0, "p/.aider.tags.cache.v4"),
+                ("d", 90, "q"),
+                ("f", 90, "q/main.py"),
+                ("d", 0, "q/.aider.tags.cache.v12"),
+            ]);
+            assert_eq!(
+                listed(&fs, &AIDER_TAGS_CACHE),
+                [
+                    "p/.aider.tags.cache.v3",
+                    "p/.aider.tags.cache.v4",
+                    "q/.aider.tags.cache.v12"
+                ]
+            );
+        }
+
+        // FR-004: what the user wrote or typed is never a candidate, as a
+        // file or as a folder, and neither is anything near the cache name.
+        #[test]
+        fn aider_chat_history_never_candidate() {
+            // Everything is old, so the project is inactive and only the
+            // names decide; the one real cache is the control.
+            let fs = load(&[
+                ("d", 90, "p"),
+                ("d", 0, "p/.aider.tags.cache.v3"),
+                ("f", 90, "p/.aider.chat.history.md"),
+                ("f", 90, "p/.aider.input.history"),
+                ("d", 90, "p/.aider.chat.history.md.d"),
+                ("d", 90, "p/.aider.input.history.d"),
+                ("f", 90, "p/.aider.tags.cache.v3.bak"),
+                ("d", 90, "p/.aider.tags.cache.v3.bak.d"),
+                ("d", 90, "p/.aider.tags.cache"),
+                ("d", 90, "p/.aider.tags.cache.v"),
+                ("d", 90, "p/.aider.tags.cache.v3x"),
+                ("d", 90, "p/.aider.tags.cache.vx3"),
+                ("d", 90, "p/.AIDER.TAGS.CACHE.V3"),
+                ("d", 90, "p/aider.tags.cache.v3"),
+                ("d", 90, "p/.aider.chat.history.v3"),
+            ]);
+            assert_eq!(listed(&fs, &AIDER_TAGS_CACHE), ["p/.aider.tags.cache.v3"]);
+        }
+
+        #[test]
+        fn aider_tags_cache_that_is_a_file_or_a_symlink_ignored() {
+            for kind in ["f", "l"] {
+                let fs = load(&[
+                    ("d", 90, "p"),
+                    ("f", 90, "p/main.py"),
+                    (kind, 0, "p/.aider.tags.cache.v3"),
+                ]);
+                assert!(listed(&fs, &AIDER_TAGS_CACHE).is_empty(), "{kind}");
+            }
+        }
+
+        // Activity: a recent file, or a recent chat history, keeps it.
+        #[test]
+        fn aider_tags_cache_of_an_active_project_ignored() {
+            for recent in ["p/main.py", "p/.aider.chat.history.md"] {
+                let fs = load(&[
+                    ("d", 90, "p"),
+                    ("f", 2, recent),
+                    ("d", 0, "p/.aider.tags.cache.v3"),
+                ]);
+                assert!(listed(&fs, &AIDER_TAGS_CACHE).is_empty(), "{recent}");
+            }
+        }
+
+        // Hidden folders of tools are not projects; a cache nested in the
+        // cache of another one is part of the outer one.
+        #[test]
+        fn aider_tags_cache_in_hidden_folders_and_nested_not_listed() {
+            let fs = load(&[
+                ("d", 900, ".claude"),
+                ("d", 90, ".claude/p"),
+                ("d", 0, ".claude/p/.aider.tags.cache.v3"),
+                ("d", 90, "p"),
+                ("d", 0, "p/.aider.tags.cache.v3"),
+                ("d", 0, "p/.aider.tags.cache.v3/.aider.tags.cache.v3"),
+            ]);
+            assert_eq!(listed(&fs, &AIDER_TAGS_CACHE), ["p/.aider.tags.cache.v3"]);
+        }
+
+        #[test]
+        fn aider_tags_cache_is_low_and_default() {
+            let m = AIDER_TAGS_CACHE.meta();
+            assert_eq!(m.risk, Risk::Low);
+            assert!(m.default_selected);
+            assert_eq!(m.os, &[Os::Macos]);
+            assert!(RULES
+                .iter()
+                .any(|r| r.meta().id.as_str() == "ai.aider.tags-cache"));
         }
     }
 

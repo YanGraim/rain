@@ -15,6 +15,9 @@ pub struct ProjectArtifact {
     pub meta: RuleMeta,
     /// Folder names of the artifact (`.venv` and `venv`, for example).
     pub dir_names: &'static [&'static str],
+    /// A name that is this prefix and then only digits (`.aider.tags.cache.v`
+    /// for `.aider.tags.cache.v3`), also an artifact.
+    pub numbered_prefix: Option<&'static str>,
     /// A regular file beside the artifact that makes the folder a project.
     pub marker: Option<&'static str>,
     /// A regular file inside the artifact that makes it the artifact: a
@@ -92,6 +95,10 @@ impl FileRule for ProjectArtifact {
 impl ProjectArtifact {
     fn is_named(&self, name: &[u8]) -> bool {
         self.dir_names.iter().any(|n| n.as_bytes() == name)
+            || self.numbered_prefix.is_some_and(|prefix| {
+                name.strip_prefix(prefix.as_bytes())
+                    .is_some_and(|rest| !rest.is_empty() && rest.iter().all(u8::is_ascii_digit))
+            })
     }
 
     /// A regular marker beside the artifact (not a link, not a folder).
@@ -119,9 +126,13 @@ impl ProjectArtifact {
         ctx: &RuleContext,
         fs: &dyn Fs,
     ) -> bool {
-        let Age::Newest(newest) =
-            newest_mtime(entry, project, fs, self.dir_names, self.age_walk_budget)
-        else {
+        let Age::Newest(newest) = newest_mtime(
+            entry,
+            project,
+            fs,
+            &|name| self.is_named(name),
+            self.age_walk_budget,
+        ) else {
             return false;
         };
         let days = self.min_age_days.unwrap_or(ctx.min_age_days);
@@ -157,7 +168,7 @@ pub(super) enum Age {
     Cancelled,
 }
 
-/// Newest mtime in `project`, outside every folder named in `dir_names` (their
+/// Newest mtime in `project`, outside every folder `is_artifact` accepts (their
 /// content is generated, not project activity). Never follows symlinks
 /// (FR-005), never leaves the volume (FR-006) and never enters a protected
 /// folder (FR-007); meeting a protected folder, a read error or more than
@@ -167,7 +178,7 @@ pub(super) fn newest_mtime(
     entry: &EntryInfo,
     project: &Path,
     fs: &dyn Fs,
-    dir_names: &[&str],
+    is_artifact: &dyn Fn(&[u8]) -> bool,
     budget: usize,
 ) -> Age {
     let dev = entry.meta.dev;
@@ -188,7 +199,7 @@ pub(super) fn newest_mtime(
             if child
                 .path
                 .file_name()
-                .is_some_and(|n| dir_names.iter().any(|d| n == *d))
+                .is_some_and(|n| is_artifact(n.as_encoded_bytes()))
             {
                 continue;
             }
@@ -252,6 +263,7 @@ mod tests {
             os: &[Os::Macos],
         },
         dir_names: &["target"],
+        numbered_prefix: None,
         marker: Some("Cargo.toml"),
         inner_marker: None,
         min_age_days: Some(90),
