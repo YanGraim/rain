@@ -432,7 +432,10 @@ mod tests {
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let canonical = std::fs::canonicalize(&real).unwrap();
-        assert_eq!(resolve(&[link.clone()]), Some(canonical.clone()));
+        assert_eq!(
+            resolve(std::slice::from_ref(&link)),
+            Some(canonical.clone())
+        );
         let out = go(&req(link, &[], Duration::from_secs(5))).unwrap();
         assert_eq!(out.stdout.trim_end(), canonical.to_str().unwrap());
     }
