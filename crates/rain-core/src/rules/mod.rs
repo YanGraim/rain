@@ -456,6 +456,8 @@ mod tests {
                 "apple.archives",
                 "apple.device-support",
                 "apple.previews",
+                "apple.sim-unavailable",
+                "apple.sim-runtimes",
                 "apple.derived-data",
                 "browser.chrome",
                 "browser.brave",
