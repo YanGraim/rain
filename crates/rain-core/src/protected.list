@@ -94,6 +94,32 @@
 ~/Library/Caches/com.dashlane.Dashlane
 ~/Library/Caches/in.sinew.Enpass-Desktop
 ~/Library/Caches/org.keepassxc.keepassxc
+# More managers, exact bundle ids only (no prefix entries in this format):
+# Proton Pass (desktop), Strongbox (macOS), MacPass, KeePassium, Keeper
+# (desktop and Mac App Store).
+~/Library/Caches/me.proton.pass.electron
+~/Library/Caches/com.markmcguill.strongbox.mac
+~/Library/Caches/com.hicknhacksoftware.MacPass
+~/Library/Caches/com.keepassium.ios
+~/Library/Caches/com.keepersecurity.passwordmanager
+~/Library/Caches/com.callpod.keepermac.lite
+# Exist per their vendors' catalogue, not confirmed to write to Caches:
+# protected as a precaution (when in doubt, protect).
+~/Library/Caches/me.proton.pass.catalyst
+~/Library/Caches/com.markmcguill.strongbox
+~/Library/Caches/com.markmcguill.strongbox.pro
+~/Library/Caches/com.markmcguill.strongbox.graphene
+~/Library/Caches/com.keepassium.ios.pro
+~/Library/Caches/com.keepersecurity.safari.keeperfill
+# Exact ids from the Homebrew cask stanzas (zap or uninstall quit): LastPass,
+# KeePassXC (its older id, besides org.keepassxc.keepassxc), RoboForm, NordPass.
+# The NordPass updater cache and the wildcard variants stay out (no prefixes).
+~/Library/Caches/com.lastpass.lastpassmacdesktop
+~/Library/Caches/org.keepassx.keepassxc
+~/Library/Caches/com.SiberSystems.RoboForm
+~/Library/Caches/com.SiberSystems.RoboForm.RoboFormService
+~/Library/Caches/com.sibersystems.RoboFormMac
+~/Library/Caches/com.nordsec.nordpass
 
 # Claude Code user data: config, credentials, sessions and history.
 # ~/.claude itself stays open so the cache and debug log rules still work.

@@ -51,6 +51,59 @@ const PROTECTED_STATE: &[(&str, &str)] = &[
     ("com.dashlane.Dashlane", "com.dashlane.Dashlane/db"),
     ("in.sinew.Enpass-Desktop", "in.sinew.Enpass-Desktop/db"),
     ("org.keepassxc.keepassxc", "org.keepassxc.keepassxc/db"),
+    // More managers, with exact bundle ids from a source (see the handoff).
+    ("me.proton.pass.electron", "me.proton.pass.electron/db"),
+    (
+        "com.markmcguill.strongbox.mac",
+        "com.markmcguill.strongbox.mac/db",
+    ),
+    (
+        "com.hicknhacksoftware.MacPass",
+        "com.hicknhacksoftware.MacPass/db",
+    ),
+    ("com.keepassium.ios", "com.keepassium.ios/db"),
+    (
+        "com.keepersecurity.passwordmanager",
+        "com.keepersecurity.passwordmanager/db",
+    ),
+    (
+        "com.callpod.keepermac.lite",
+        "com.callpod.keepermac.lite/db",
+    ),
+    // Exist per their vendors' catalogue, not confirmed to write to Caches:
+    // protected as a precaution (when in doubt, protect).
+    ("me.proton.pass.catalyst", "me.proton.pass.catalyst/db"),
+    ("com.markmcguill.strongbox", "com.markmcguill.strongbox/db"),
+    (
+        "com.markmcguill.strongbox.pro",
+        "com.markmcguill.strongbox.pro/db",
+    ),
+    (
+        "com.markmcguill.strongbox.graphene",
+        "com.markmcguill.strongbox.graphene/db",
+    ),
+    ("com.keepassium.ios.pro", "com.keepassium.ios.pro/db"),
+    (
+        "com.keepersecurity.safari.keeperfill",
+        "com.keepersecurity.safari.keeperfill/db",
+    ),
+    // Exact ids from the Homebrew cask stanzas (zap or uninstall quit) of
+    // LastPass, KeePassXC (its older id), RoboForm and NordPass.
+    (
+        "com.lastpass.lastpassmacdesktop",
+        "com.lastpass.lastpassmacdesktop/db",
+    ),
+    ("org.keepassx.keepassxc", "org.keepassx.keepassxc/db"),
+    ("com.SiberSystems.RoboForm", "com.SiberSystems.RoboForm/db"),
+    (
+        "com.SiberSystems.RoboForm.RoboFormService",
+        "com.SiberSystems.RoboForm.RoboFormService/db",
+    ),
+    (
+        "com.sibersystems.RoboFormMac",
+        "com.sibersystems.RoboFormMac/db",
+    ),
+    ("com.nordsec.nordpass", "com.nordsec.nordpass/db"),
 ];
 
 /// Children owned by `sys.sensitive-caches` (high, not preselected): sign-in
