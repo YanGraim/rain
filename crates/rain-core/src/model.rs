@@ -186,6 +186,34 @@ pub struct Unmanaged {
     pub file_count: u64,
 }
 
+/// Why an item is not listed by a rule that could have listed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExcludedReason {
+    /// Another rule, earlier in the registry, found the very same path.
+    SamePath,
+    /// The item lies inside an item of the rule that excluded it, and
+    /// another, more specific rule keeps it.
+    InsideItem,
+    /// Some of the item's bytes belong to a hardlinked inode already counted
+    /// in an item of another rule (or another item).
+    SharedHardlink,
+}
+
+/// Something a rule left out because another rule keeps it (items are
+/// disjoint: no byte is counted twice). Informational: it has no item id, so
+/// it cannot be selected, and it is in no total.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Excluded {
+    /// The rule that did not list it.
+    pub rule: RuleId,
+    /// The path: of the item that was left to another rule, or, for a shared
+    /// hardlink, of the item that lost the bytes.
+    pub path: PathBuf,
+    /// The rule that kept it.
+    pub kept_by: RuleId,
+    pub reason: ExcludedReason,
+}
+
 /// Result of a complete scan. Only ever built for a scan that finished.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScanReport {
@@ -207,4 +235,8 @@ pub struct ScanReport {
     /// FR-004: user data that exists, sorted by `(id, path)`. Not part of
     /// any total and never selectable.
     pub unmanaged: Vec<Unmanaged>,
+    /// What a rule left out because a more specific one keeps it, sorted by
+    /// `(rule, path, kept_by, reason)` without duplicates. Informational: in
+    /// no total and never selectable.
+    pub excluded: Vec<Excluded>,
 }
