@@ -14,7 +14,7 @@ use crate::fs::Fs;
 use crate::plan::{Identity, PlanItem};
 use crate::planner::{self, ResolvedRoots};
 use crate::protect::ProtectList;
-use crate::rule::{EntryInfo, FileRule, RuleContext, RuleKind, Visit};
+use crate::rule::{EntryInfo, FileRule, RootedPath, RuleContext, RuleKind, Visit};
 use crate::rules;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -122,9 +122,14 @@ fn check(item: &PlanItem, ctx: &Revalidation) -> Result<(), Outcome> {
     if ctx.protect.is_protected_entry(path, &meta) || ctx.protect.is_protected_on(ctx.fs, path) {
         return Err(stop(Stop::Protected));
     }
-    if ctx.protect.user_data_alias_on(ctx.fs, path).is_some()
-        || ctx.protect.in_claude_home_on(ctx.fs, path)
-    {
+    if ctx.protect.user_data_alias_on(ctx.fs, path).is_some() {
+        return Err(stop(Stop::UserData));
+    }
+    // `~/.claude` holds the user's history, so nothing there is moved, with
+    // one exception: what sits strictly below a folder the rule itself names
+    // as a root (the Claude Code cache and log rules), which is what a scan
+    // lists there.
+    if ctx.protect.in_claude_home_on(ctx.fs, path) && !below_a_named_claude_root(rule, path, ctx) {
         return Err(stop(Stop::UserData));
     }
     check_ancestors(item, home, ctx)?;
@@ -144,6 +149,19 @@ fn check(item: &PlanItem, ctx: &Revalidation) -> Result<(), Outcome> {
         return Err(skip(Skip::RuleNoLongerClaims));
     }
     read_inside(path, &meta, ctx)
+}
+
+/// True when `path` is strictly inside a root that `rule` declares and that
+/// is itself inside `~/.claude`.
+fn below_a_named_claude_root(rule: &dyn FileRule, path: &Path, ctx: &Revalidation) -> bool {
+    rule.roots(ctx.rule_ctx).iter().any(|rooted| {
+        planner::resolve(rooted, ctx.roots).is_ok_and(|(root, _)| {
+            path.starts_with(&root)
+                && path != root
+                && ctx.protect.in_claude_home_on(ctx.fs, &root)
+                && matches!(rooted, RootedPath::Under(..))
+        })
+    })
 }
 
 fn file_rule(item: &PlanItem) -> Option<&'static dyn FileRule> {
@@ -258,7 +276,9 @@ fn read_inside(path: &Path, meta: &crate::fs::Metadata, ctx: &Revalidation) -> R
                 .fs
                 .symlink_metadata(&child.path)
                 .map_err(|_| Outcome::Skip(Skip::Unverifiable))?;
-            if ctx.protect.is_protected_entry(&child.path, &meta) {
+            if ctx.protect.is_protected_entry(&child.path, &meta)
+                || ctx.protect.user_data_alias(&child.path, &meta).is_some()
+            {
                 return Err(Outcome::Stop(Stop::ProtectedInside));
             }
             // A link is only a name, on the volume of the folder that holds it.
@@ -289,6 +309,8 @@ mod tests {
     const LOGS: RuleId = RuleId::new("sys.logs");
     const RUST_TARGET: RuleId = RuleId::new("proj.rust-target");
     const NODE_MODULES: RuleId = RuleId::new("proj.node-modules");
+    const CLAUDE_CACHE: RuleId = RuleId::new("ai.claude-code.cache");
+    const CLAUDE_LOGS: RuleId = RuleId::new("ai.claude-code.logs");
 
     struct HomeAt;
 
@@ -344,8 +366,15 @@ mod tests {
             d("/Users/t/.claude", 50),
             d("/Users/t/.claude/projects", 51),
             d("/Users/t/.claude/futuro", 52),
+            d("/Users/t/.claude/cache", 55),
+            d("/Users/t/.claude/cache/abc", 56),
+            d("/Users/t/.claude/shell-snapshots", 57),
+            d("/Users/t/.claude/shell-snapshots/s1", 58),
+            d("/Users/t/.claude/debug", 59),
+            d("/Users/t/.claude/debug/d1", 61),
             d("/Users/t/.claude/futuro/node_modules", 53),
             f("/Users/t/.claude/futuro/package.json", 54),
+            f("/Users/t/.aider.chat.history.md", 62),
             d("/Users/t/.codex", 80),
             d("/Users/t/.codex/sessions", 81),
             d("/Users/t/proj", 30),
@@ -607,6 +636,82 @@ mod tests {
         );
     }
 
+    // The Claude Code rules are low risk and preselected, and their roots are
+    // named folders inside `~/.claude`: what they list there is theirs to move.
+    #[test]
+    fn a_claude_cache_item_under_a_named_claude_root_is_clear() {
+        let fs = world();
+        for (rule, path) in [
+            (CLAUDE_CACHE, "/Users/t/.claude/cache/abc"),
+            (CLAUDE_CACHE, "/Users/t/.claude/shell-snapshots/s1"),
+            (CLAUDE_LOGS, "/Users/t/.claude/debug/d1"),
+        ] {
+            assert_eq!(
+                check(&fs, &item_of(&fs, rule, path)),
+                Outcome::Clear,
+                "{path}"
+            );
+        }
+    }
+
+    // The exception is only for what is BELOW a root the rule names, and only
+    // for that rule: not the root itself, not another rule, not another folder.
+    #[test]
+    fn the_claude_exception_is_narrow() {
+        let fs = world();
+        let stopped = |rule: RuleId, path: &str| {
+            matches!(
+                check(&fs, &item_of(&fs, rule, path)),
+                Outcome::Stop(Stop::UserData) | Outcome::Stop(Stop::Protected)
+            )
+        };
+        // The named root itself (it holds the rule's items, it is not one).
+        assert!(stopped(CLAUDE_CACHE, "/Users/t/.claude/cache"));
+        // A rule that does not name that folder.
+        assert!(stopped(CLAUDE_LOGS, "/Users/t/.claude/cache/abc"));
+        assert!(stopped(NODE_MODULES, "/Users/t/.claude/cache/abc"));
+        // A folder of `~/.claude` that no rule names.
+        assert!(stopped(CLAUDE_CACHE, "/Users/t/.claude/futuro"));
+    }
+
+    // A root the user typed (`--path`) inside `~/.claude` is not a named root
+    // of the rule: the scan refuses it, and so does the check.
+    #[test]
+    fn a_user_root_inside_the_claude_home_does_not_open_the_exception() {
+        let fs = world();
+        let item = item_of(&fs, NODE_MODULES, "/Users/t/.claude/futuro/node_modules");
+        let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(&fs);
+        let roots = ResolvedRoots {
+            home: PathBuf::from(HOME),
+            caches: PathBuf::from("/Users/t/Library/Caches"),
+            logs: PathBuf::from("/Users/t/Library/Logs"),
+        };
+        let rule_ctx = RuleContext {
+            min_age_days: 30,
+            user_paths: vec![PathBuf::from("/Users/t/.claude/futuro")],
+            now: now(),
+        };
+        let cancel = AtomicBool::new(false);
+        let outcome = revalidate(
+            &item,
+            &Revalidation {
+                fs: &fs,
+                protect: &protect,
+                roots: &roots,
+                rule_ctx: &rule_ctx,
+                cancel: &cancel,
+                max_entries: DEFAULT_MAX_ENTRIES,
+            },
+        );
+        assert!(
+            matches!(
+                outcome,
+                Outcome::Stop(Stop::UserData) | Outcome::Stop(Stop::Protected)
+            ),
+            "{outcome:?}"
+        );
+    }
+
     // User data outside `~/.claude` is on the list by name.
     #[test]
     fn user_data_outside_the_claude_folder_is_refused_by_name() {
@@ -680,6 +785,19 @@ mod tests {
         e.push((format!("{COM_A}/deep/alias"), md(true, 20, 2, 7, 200)));
         let deep = fs_of(&e, &[]);
         assert_eq!(check(&deep, &item), Outcome::Stop(Stop::ProtectedInside));
+    }
+
+    // A name inside the item for a chat history kept elsewhere: the scan
+    // refuses it by identity, so the check does too.
+    #[test]
+    fn a_hardlink_to_user_data_inside_the_item_stops_the_run() {
+        let item = item_of(&world(), CACHES, COM_A);
+        let mut e = entries();
+        e.push((format!("{COM_A}/history"), md(false, 62, 2, 7, 200)));
+        assert_eq!(
+            check(&fs_of(&e, &[]), &item),
+            Outcome::Stop(Stop::ProtectedInside)
+        );
     }
 
     #[test]
