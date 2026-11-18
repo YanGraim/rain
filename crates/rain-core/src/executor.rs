@@ -1181,6 +1181,62 @@ mod tests {
         }
     }
 
+    // A Trash that says it moved the item but reports another entry at the
+    // destination: not accepted as done.
+    #[test]
+    fn a_move_that_reports_another_entry_is_not_counted_as_done() {
+        struct Other(FakeTrash);
+        impl Trash for Other {
+            fn trash(
+                &self,
+                target: &TrashTarget,
+                cancel: &AtomicBool,
+            ) -> Result<crate::trash::Trashed, TrashError> {
+                let mut done = self.0.trash(target, cancel)?;
+                done.identity_after.ino += 1;
+                Ok(done)
+            }
+        }
+        let fs = world();
+        let plan = low_plan(&fs);
+        let other = Other(FakeTrash::new());
+        let protect = ProtectList::builtin(&HomeAt).unwrap().with_identities(&fs);
+        let roots = ResolvedRoots {
+            home: PathBuf::from(HOME),
+            caches: PathBuf::from("/Users/t/Library/Caches"),
+            logs: PathBuf::from("/Users/t/Library/Logs"),
+        };
+        let rule_ctx = RuleContext {
+            min_age_days: 30,
+            user_paths: Vec::new(),
+            now: SystemTime::UNIX_EPOCH + Duration::from_secs(NOW + 5),
+        };
+        let clock = FixedClock(SystemTime::UNIX_EPOCH + Duration::from_secs(NOW + 5));
+        let log = FakeLog::new();
+        let apps = FakeAppProbe::new();
+        let cancel = AtomicBool::new(false);
+        let out = Executor {
+            fs: &fs,
+            protect: &protect,
+            roots: &roots,
+            rule_ctx: &rule_ctx,
+            trash: &other,
+            log: &log,
+            apps: &apps,
+            clock: &clock,
+            cancel: &cancel,
+            running_as_root: false,
+            max_entries: 1_000,
+        }
+        .run(&plan)
+        .unwrap();
+        assert!(out.moved.is_empty());
+        assert_eq!(out.stopped, Some(Stopped::Misplaced { id: id(CACHES, A) }));
+        assert_eq!(out.exit, ExitCode::SafetyStop);
+        // It was asked once and the run ended there.
+        assert_eq!(paths(&other.0.calls()), [A]);
+    }
+
     // The wrong entry was moved: stop, with its own code and log line.
     #[test]
     fn a_misplaced_entry_stops_the_run_with_a_safety_code() {
@@ -1211,6 +1267,15 @@ mod tests {
         assert!(rig.trash.calls().is_empty());
         assert_eq!(out.stopped, Some(Stopped::Cancelled));
         assert_eq!(out.exit, ExitCode::Cancelled);
+        // The check between items comes first: no item was even started.
+        assert!(
+            !rig.log
+                .events()
+                .iter()
+                .any(|e| matches!(e, LogEvent::ItemStarted { .. })),
+            "{:?}",
+            rig.log.events()
+        );
         // Raised during the first move: that item still ends, the next does not start.
         struct Cancelling<'a>(FakeTrash, &'a AtomicBool);
         impl Trash for Cancelling<'_> {
