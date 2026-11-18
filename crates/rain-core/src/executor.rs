@@ -663,6 +663,8 @@ mod tests {
     const C: &str = "/Users/t/Library/Caches/com.c";
     const LOG: &str = "/Users/t/Library/Logs/old.log";
     const ARCHIVE: &str = "/Users/t/Library/Developer/Xcode/Archives/2024/App.xcarchive";
+    const GO_MOD_ITEM: &str = "/Users/t/go/pkg/mod/golang.org";
+    const GO_MOD: RuleId = RuleId::new("pkg.go-mod");
 
     fn world() -> FakeFs {
         let mut fs = FakeFs::new();
@@ -684,7 +686,11 @@ mod tests {
                 "/Users/t/Library/Developer/Xcode/Archives/2024",
                 md(true, 43),
             )
-            .insert(ARCHIVE, md(true, 44));
+            .insert(ARCHIVE, md(true, 44))
+            .insert("/Users/t/go", md(true, 60))
+            .insert("/Users/t/go/pkg", md(true, 61))
+            .insert("/Users/t/go/pkg/mod", md(true, 62))
+            .insert(GO_MOD_ITEM, md(true, 63));
         fs
     }
 
@@ -725,6 +731,7 @@ mod tests {
             scan_item(CACHES, C, 400),
             scan_item(LOGS, LOG, 50),
             scan_item(ARCHIVES, ARCHIVE, 9_000),
+            scan_item(GO_MOD, GO_MOD_ITEM, 3_000),
         ];
         items.extend(extra.iter().cloned());
         items.sort_by(|a, b| (a.rule, &a.path).cmp(&(b.rule, &b.path)));
@@ -732,6 +739,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             rules: vec![
                 rule_total(ARCHIVES, Risk::High, Some(XCODE)),
+                rule_total(GO_MOD, Risk::Medium, None),
                 rule_total(LOGS, Risk::Low, None),
                 rule_total(CACHES, Risk::Low, None),
             ],
@@ -1421,6 +1429,56 @@ mod tests {
             "{out:?}"
         );
         assert!(rig.trash.calls().is_empty());
+    }
+
+    // The risk alone is forged: the rule is high, the plan says low, and the
+    // confirmation and the app match the lie as well as the truth allows.
+    #[test]
+    fn a_plan_that_only_lowers_the_risk_is_refused() {
+        let fs = world();
+        let mut plan = archive_plan(&fs);
+        plan.items[0].risk = Risk::Low;
+        plan.plan_hash = crate::plan::plan_hash(&plan.items);
+        let mut rig = Rig::new();
+        rig.apps = FakeAppProbe::new().with(XCODE, AppState::Closed);
+        let out = run_on(&fs, &rig, &plan);
+        assert!(
+            matches!(out, Err(RunRefused::Plan(PlanError::Malformed(_)))),
+            "{out:?}"
+        );
+        assert!(rig.trash.calls().is_empty());
+    }
+
+    // A medium item needs a yes, either kind; a high one needs its own.
+    #[test]
+    fn a_medium_item_takes_either_confirmation_and_nothing_less() {
+        let fs = world();
+        let medium = |confirmation| {
+            // Built with a yes, as `rain clean` would; the field is then set
+            // to what the test needs.
+            let mut plan = make_plan(
+                &fs,
+                &report(&[]),
+                &[id(GO_MOD, GO_MOD_ITEM)],
+                &[id(GO_MOD, GO_MOD_ITEM)],
+            );
+            plan.items[0].confirmation = confirmation;
+            plan
+        };
+        for ok in [Confirmation::Confirmed, Confirmation::ConfirmedHigh] {
+            let rig = Rig::new();
+            let out = run_on(&fs, &rig, &medium(ok)).unwrap();
+            assert_eq!(out.moved.len(), 1, "{ok:?}");
+        }
+        for refused in [Confirmation::NotNeeded, Confirmation::Pending] {
+            let rig = Rig::new();
+            assert_eq!(
+                run_on(&fs, &rig, &medium(refused)),
+                Err(RunRefused::NotConfirmed),
+                "{refused:?}"
+            );
+            assert!(rig.trash.calls().is_empty());
+        }
     }
 
     #[test]
