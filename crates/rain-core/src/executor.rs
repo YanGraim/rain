@@ -18,12 +18,13 @@
 
 use crate::clock::Clock;
 use crate::fs::Fs;
-use crate::model::{ItemId, RuleId};
+use crate::model::{ItemId, Risk, RuleId};
 use crate::plan::{Confirmation, Plan, PlanError, PlanItem};
 use crate::planner::ResolvedRoots;
 use crate::protect::ProtectList;
 use crate::revalidate::{self, Outcome, Revalidation, Skip, Stop};
-use crate::rule::RuleContext;
+use crate::rule::{RuleContext, RuleKind};
+use crate::rules;
 use crate::trash::{Trash, TrashError, TrashTarget};
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -141,9 +142,21 @@ pub enum ExitCode {
 /// Why the run ended before the end of the plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stopped {
-    Safety { id: ItemId, why: Stop },
-    Misplaced { id: ItemId },
-    Trash { id: ItemId, why: TrashFailure },
+    Safety {
+        id: ItemId,
+        why: Stop,
+    },
+    /// Another entry was moved: where it is in the Trash, and whether it was put back
+    /// (`false` is also "not known").
+    Misplaced {
+        id: ItemId,
+        trash_name: OsString,
+        restored: bool,
+    },
+    Trash {
+        id: ItemId,
+        why: TrashFailure,
+    },
     Log,
     Cancelled,
 }
@@ -228,27 +241,35 @@ impl Executor<'_> {
             stopped: None,
             exit: ExitCode::Done,
         };
+        // What the log refused to take, to be tried once more before the end.
+        let mut pending: Option<LogEvent> = None;
         for item in &plan.items {
             // Only between items: one in progress is moved or fails whole.
             if self.cancel.load(Ordering::SeqCst) {
                 report.stopped = Some(Stopped::Cancelled);
                 break;
             }
-            if let Some(stop) = self.item(item, &mut report) {
+            if let Some(stop) = self.item(item, &mut report, &mut pending) {
                 report.stopped = Some(stop);
                 break;
             }
         }
         report.exit = exit_of(&report);
-        // The end is written even after a stop; if the log is what failed,
-        // there is nothing more to be done about it here.
-        let _ = self.log.record(&LogEvent::RunFinished {
-            moved: report.moved.len(),
-            skipped: report.left.len(),
-            bytes: report.bytes_moved(),
-            exit: report.exit,
-        });
-        let _ = self.log.sync();
+        // The end is written even after a stop, but never over a gap: if the
+        // log refused a line and still refuses it, "finished" is left out so
+        // the missing line shows instead of being covered by a clean ending.
+        let gap = pending
+            .as_ref()
+            .is_some_and(|event| self.log.record(event).is_err());
+        if !gap {
+            let _ = self.log.record(&LogEvent::RunFinished {
+                moved: report.moved.len(),
+                skipped: report.left.len(),
+                bytes: report.bytes_moved(),
+                exit: report.exit,
+            });
+            let _ = self.log.sync();
+        }
         Ok(report)
     }
 
@@ -272,19 +293,35 @@ impl Executor<'_> {
         if !plan.items.iter().all(|i| seen.insert(i.id)) {
             return Err(RunRefused::Plan(PlanError::Malformed("repeated item")));
         }
-        // A preview is not a plan to run.
-        if plan
-            .items
-            .iter()
-            .any(|i| i.confirmation == Confirmation::Pending)
-        {
+        // The plan is a document anyone can edit, hash included. What decides
+        // how an item is treated, its risk and the app to close, is the live
+        // rule's, and the plan has to agree with it; the confirmation has to
+        // be the one that risk asks for.
+        let mut unconfirmed = false;
+        for item in &plan.items {
+            let meta = live_meta(item).ok_or(RunRefused::Plan(PlanError::Malformed("rule")))?;
+            if meta.risk != item.risk {
+                return Err(RunRefused::Plan(PlanError::Malformed("risk")));
+            }
+            if meta.requires_app_closed != item.requires_app_closed.as_deref() {
+                return Err(RunRefused::Plan(PlanError::Malformed("app")));
+            }
+            unconfirmed |= !confirmed_enough(meta.risk, item.confirmation);
+        }
+        // A preview is not a plan to run, and a medium or high item needs its own yes.
+        if unconfirmed {
             return Err(RunRefused::NotConfirmed);
         }
         Ok(())
     }
 
     /// One item. `Some` ends the run.
-    fn item(&self, item: &PlanItem, report: &mut RunReport) -> Option<Stopped> {
+    fn item(
+        &self,
+        item: &PlanItem,
+        report: &mut RunReport,
+        pending: &mut Option<LogEvent>,
+    ) -> Option<Stopped> {
         // Write-ahead, on disk before the move: no log, no action.
         let started = LogEvent::ItemStarted {
             id: item.id,
@@ -313,7 +350,8 @@ impl Executor<'_> {
             Outcome::Stop(why) => return Some(Stopped::Safety { id: item.id, why }),
             Outcome::Cancelled => return Some(Stopped::Cancelled),
         }
-        if let Some(app) = &item.requires_app_closed {
+        // The rule's app, not the plan's (`admit` made sure they agree).
+        if let Some(app) = live_meta(item).and_then(|m| m.requires_app_closed) {
             if self.apps.state(app) != AppState::Closed {
                 return self.leave(item, SkipReason::AppRunning, report);
             }
@@ -337,7 +375,11 @@ impl Executor<'_> {
                 };
                 // The entry is in the Trash and cannot be put back from here:
                 // if the log cannot say so, the run ends and reports it.
-                self.log.record(&trashed).err().map(|_| Stopped::Log)
+                if self.log.record(&trashed).is_err() {
+                    *pending = Some(trashed);
+                    return Some(Stopped::Log);
+                }
+                None
             }
             Err(TrashError::Gone) => self.leave(item, SkipReason::Gone, report),
             Err(TrashError::OtherVolume) => self.leave(item, SkipReason::OtherVolume, report),
@@ -390,10 +432,14 @@ impl Executor<'_> {
         let _ = self.log.record(&LogEvent::ItemMisplaced {
             id: item.id,
             path: item.path.clone(),
-            trash_name,
+            trash_name: trash_name.clone(),
             restored,
         });
-        Some(Stopped::Misplaced { id: item.id })
+        Some(Stopped::Misplaced {
+            id: item.id,
+            trash_name,
+            restored,
+        })
     }
 
     fn trash_failed(&self, item: &PlanItem, kind: TrashFailure) -> Option<Stopped> {
@@ -406,6 +452,29 @@ impl Executor<'_> {
             id: item.id,
             why: kind,
         })
+    }
+}
+
+/// The metadata of the rule that lists the item, today's, for a rule that
+/// finds files.
+fn live_meta(item: &PlanItem) -> Option<&'static crate::rule::RuleMeta> {
+    rules::builtin()
+        .iter()
+        .find(|r| r.meta().id == item.rule)
+        .and_then(|r| match r.kind() {
+            RuleKind::Files(_) => Some(r.meta()),
+            RuleKind::Provider(_) => None,
+        })
+}
+
+/// Low needs nothing, medium a yes, high its own yes. A pending item is none.
+fn confirmed_enough(risk: Risk, given: Confirmation) -> bool {
+    match (risk, given) {
+        (_, Confirmation::Pending) => false,
+        (Risk::Low, _) => true,
+        (Risk::Medium, Confirmation::Confirmed | Confirmation::ConfirmedHigh) => true,
+        (Risk::High, Confirmation::ConfirmedHigh) => true,
+        _ => false,
     }
 }
 
@@ -445,7 +514,7 @@ mod fakes {
     pub struct FakeLog {
         events: Mutex<Vec<LogEvent>>,
         syncs: Mutex<Vec<usize>>,
-        fail_record_at: Option<usize>,
+        fail_record_at: Vec<usize>,
         fail_sync_at: Option<usize>,
         record_calls: Mutex<usize>,
         sync_calls: Mutex<usize>,
@@ -455,9 +524,10 @@ mod fakes {
         pub fn new() -> Self {
             Self::default()
         }
-        /// The `n`-th `record` (from 0) fails, and nothing is stored for it.
+        /// The `n`-th `record` (from 0) fails, and nothing is stored for it. May be
+        /// called more than once to fail several.
         pub fn fail_record_at(mut self, n: usize) -> Self {
-            self.fail_record_at = Some(n);
+            self.fail_record_at.push(n);
             self
         }
         /// The `n`-th `sync` (from 0) fails.
@@ -485,7 +555,7 @@ mod fakes {
                     n
                 })
                 .unwrap_or(0);
-            if self.fail_record_at == Some(n) {
+            if self.fail_record_at.contains(&n) {
                 return Err(LogError);
             }
             if let Ok(mut events) = self.events.lock() {
@@ -913,6 +983,45 @@ mod tests {
         assert_eq!(&syncs[..3], &[2, 4, 6]);
     }
 
+    // The log refused the line that says an item was moved. If the run then
+    // wrote "finished", the log would claim a clean ending with a move missing
+    // from it. It tries that line once more; if the log still refuses, it
+    // does not write "finished" at all, so the gap shows.
+    #[test]
+    fn a_log_that_lost_the_trashed_line_never_claims_the_run_finished() {
+        let fs = world();
+        // run(0) start1(1) done1(2 fails) done1-again(3 fails too).
+        let mut rig = Rig::new();
+        rig.log = FakeLog::new().fail_record_at(2).fail_record_at(3);
+        let out = run_on(&fs, &rig, &low_plan(&fs)).unwrap();
+        assert_eq!(out.stopped, Some(Stopped::Log));
+        assert_eq!(out.moved.len(), 1);
+        assert!(
+            !rig.log
+                .events()
+                .iter()
+                .any(|e| matches!(e, LogEvent::RunFinished { .. })),
+            "{:?}",
+            rig.log.events()
+        );
+        // One failure only: the line is written on the second try, and the
+        // run's end is written after it.
+        let mut rig = Rig::new();
+        rig.log = FakeLog::new().fail_record_at(2);
+        let out = run_on(&fs, &rig, &low_plan(&fs)).unwrap();
+        assert_eq!(out.stopped, Some(Stopped::Log));
+        let events = rig.log.events();
+        let trashed = events
+            .iter()
+            .position(|e| matches!(e, LogEvent::ItemTrashed { .. }))
+            .expect("the line was written on the retry");
+        let finished = events
+            .iter()
+            .position(|e| matches!(e, LogEvent::RunFinished { .. }))
+            .expect("the end is written once nothing is missing");
+        assert!(trashed < finished);
+    }
+
     // A failing log after a move that worked: stop and say so; what moved is reported.
     #[test]
     fn a_log_that_fails_after_a_move_stops_the_run_and_reports_it() {
@@ -1231,10 +1340,101 @@ mod tests {
         .run(&plan)
         .unwrap();
         assert!(out.moved.is_empty());
-        assert_eq!(out.stopped, Some(Stopped::Misplaced { id: id(CACHES, A) }));
+        assert_eq!(
+            out.stopped,
+            Some(Stopped::Misplaced {
+                id: id(CACHES, A),
+                trash_name: "com.a".into(),
+                restored: false
+            })
+        );
         assert_eq!(out.exit, ExitCode::SafetyStop);
         // It was asked once and the run ended there.
         assert_eq!(paths(&other.0.calls()), [A]);
+    }
+
+    // The plan is a document anyone can edit, and its hash can be recomputed:
+    // risk, confirmation and the app to close are the rule's, not the plan's.
+    fn archive_plan(fs: &FakeFs) -> Plan {
+        make_plan(
+            fs,
+            &report(&[]),
+            &[id(ARCHIVES, ARCHIVE)],
+            &[id(ARCHIVES, ARCHIVE)],
+        )
+    }
+
+    #[test]
+    fn a_plan_with_a_forged_low_risk_for_a_high_rule_is_refused() {
+        let fs = world();
+        let mut plan = archive_plan(&fs);
+        plan.items[0].risk = Risk::Low;
+        plan.items[0].requires_app_closed = None;
+        plan.items[0].confirmation = Confirmation::NotNeeded;
+        plan.plan_hash = crate::plan::plan_hash(&plan.items);
+        let mut rig = Rig::new();
+        rig.apps = FakeAppProbe::new().with(XCODE, AppState::Closed);
+        let out = run_on(&fs, &rig, &plan);
+        assert!(
+            matches!(out, Err(RunRefused::Plan(PlanError::Malformed(_)))),
+            "{out:?}"
+        );
+        assert!(rig.trash.calls().is_empty());
+        assert!(rig.log.events().is_empty());
+    }
+
+    #[test]
+    fn a_high_item_without_its_own_confirmation_is_refused() {
+        let fs = world();
+        let honest = archive_plan(&fs);
+        // Only a medium confirmation, or none at all, stands for nothing here.
+        for confirmation in [Confirmation::NotNeeded, Confirmation::Confirmed] {
+            let mut plan = honest.clone();
+            plan.items[0].confirmation = confirmation;
+            let mut rig = Rig::new();
+            rig.apps = FakeAppProbe::new().with(XCODE, AppState::Closed);
+            assert_eq!(
+                run_on(&fs, &rig, &plan),
+                Err(RunRefused::NotConfirmed),
+                "{confirmation:?}"
+            );
+            assert!(rig.trash.calls().is_empty());
+        }
+        // Medium risk takes either confirmation; low takes any.
+        let mut rig = Rig::new();
+        rig.apps = FakeAppProbe::new().with(XCODE, AppState::Closed);
+        assert!(run_on(&fs, &rig, &honest).is_ok());
+    }
+
+    #[test]
+    fn a_forged_plan_without_the_app_requirement_still_asks_the_probe() {
+        let fs = world();
+        let mut plan = archive_plan(&fs);
+        plan.items[0].requires_app_closed = None;
+        plan.plan_hash = crate::plan::plan_hash(&plan.items);
+        // The plan disagrees with the rule about the app: refused before acting.
+        let mut rig = Rig::new();
+        rig.apps = FakeAppProbe::new().with(XCODE, AppState::Running);
+        let out = run_on(&fs, &rig, &plan);
+        assert!(
+            matches!(out, Err(RunRefused::Plan(PlanError::Malformed(_)))),
+            "{out:?}"
+        );
+        assert!(rig.trash.calls().is_empty());
+    }
+
+    #[test]
+    fn a_plan_that_names_a_rule_the_program_does_not_know_is_refused() {
+        let fs = world();
+        let mut plan = low_plan(&fs);
+        plan.items[0].rule = RuleId::new("made.up");
+        let rig = Rig::new();
+        let out = run_on(&fs, &rig, &plan);
+        assert!(
+            matches!(out, Err(RunRefused::Plan(PlanError::Malformed(_)))),
+            "{out:?}"
+        );
+        assert!(rig.trash.calls().is_empty());
     }
 
     // The wrong entry was moved: stop, with its own code and log line.
@@ -1245,7 +1445,14 @@ mod tests {
         rig.trash.move_the_wrong_entry(B);
         let out = run_on(&fs, &rig, &low_plan(&fs)).unwrap();
         assert_eq!(paths(&rig.trash.calls()), [A, B]);
-        assert_eq!(out.stopped, Some(Stopped::Misplaced { id: id(CACHES, B) }));
+        assert_eq!(
+            out.stopped,
+            Some(Stopped::Misplaced {
+                id: id(CACHES, B),
+                trash_name: "com.b".into(),
+                restored: false
+            })
+        );
         assert_eq!(out.exit, ExitCode::SafetyStop);
         assert!(rig.log.events().iter().any(|e| matches!(
             e,
