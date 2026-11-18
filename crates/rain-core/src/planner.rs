@@ -408,7 +408,10 @@ fn nested_in(accepted: &BTreeMap<PathBuf, usize>, outer: &Path, idx: usize) -> B
 /// leave it, so anything else is refused as [`SkipReason::InvalidRoot`].
 /// A symlink inside a valid `rel` is caught by the walker, which never
 /// follows it and reports it as [`SkipReason::Symlink`].
-fn resolve(rooted: &RootedPath, roots: &ResolvedRoots) -> Result<(PathBuf, bool), Skipped> {
+pub(crate) fn resolve(
+    rooted: &RootedPath,
+    roots: &ResolvedRoots,
+) -> Result<(PathBuf, bool), Skipped> {
     match rooted {
         RootedPath::Under(root, rel) => {
             let base = match root {
