@@ -137,7 +137,11 @@ fn map_rename(e: Errno) -> MoveError {
         Errno::NOENT => MoveError::Gone,
         Errno::ACCESS | Errno::PERM | Errno::ROFS => MoveError::PermissionDenied,
         Errno::XDEV => MoveError::OtherVolume,
-        Errno::INVAL | Errno::NOTSUP | Errno::OPNOTSUPP => MoveError::NoReplaceUnsupported,
+        Errno::INVAL | Errno::OPNOTSUPP => MoveError::NoReplaceUnsupported,
+        // On macOS ENOTSUP and EOPNOTSUPP are different numbers; on Linux they
+        // are the same one, so this arm exists only where it is a new value.
+        #[cfg(target_os = "macos")]
+        Errno::NOTSUP => MoveError::NoReplaceUnsupported,
         other => MoveError::Io(io::Error::from(other).kind()),
     }
 }

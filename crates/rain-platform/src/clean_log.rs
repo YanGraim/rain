@@ -6,7 +6,7 @@
 //! write is one `write` call; a line counts as recorded only after the disk
 //! has been told to flush (`F_FULLFSYNC` on macOS, which `fsync` does not do).
 
-use rustix::fs::{fcntl_fullfsync, fstat, openat, FileType, Mode, OFlags, RawMode};
+use rustix::fs::{fstat, openat, FileType, Mode, OFlags, RawMode};
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
@@ -58,7 +58,7 @@ impl CleanLogFile {
     /// Flushes everything written so far to the disk (`F_FULLFSYNC`, which
     /// `fsync` does not do on macOS).
     pub fn sync(&self) -> Result<(), LogError> {
-        self.sync_with(|fd| fcntl_fullfsync(fd))
+        self.sync_with(flush_to_disk)
     }
 
     /// Opens the file and hands its descriptor to `flush`; the real flush is
@@ -99,6 +99,18 @@ impl CleanLogFile {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Asks the system to put the bytes on disk. macOS needs `F_FULLFSYNC`
+/// (`fsync` only reaches the drive cache); other systems use `fsync`.
+#[cfg(target_os = "macos")]
+fn flush_to_disk(fd: std::os::fd::BorrowedFd<'_>) -> rustix::io::Result<()> {
+    rustix::fs::fcntl_fullfsync(fd)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn flush_to_disk(fd: std::os::fd::BorrowedFd<'_>) -> rustix::io::Result<()> {
+    rustix::fs::fsync(fd)
 }
 
 /// The rule for the log file: a regular file, the user's, exactly 0600.
