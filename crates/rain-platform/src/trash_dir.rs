@@ -6,6 +6,7 @@
 //! tempdir. The Trash folder is never created; if it is missing, the move
 //! is refused as `TrashUnavailable`.
 
+use crate::entry_check::{entry_ident, open_parent_checked, EntryIdent, FolderId};
 use rustix::fs::{
     fstat, openat, renameat_with, statat, AtFlags, Mode, OFlags, RawMode, RenameFlags,
 };
@@ -22,6 +23,9 @@ pub enum MoveError {
     Gone,
     /// The Trash folder is missing or is not safe to write to.
     TrashUnavailable(ErrorKind),
+    /// Another entry was moved into the Trash under the moved entry's name:
+    /// it was put back when `restored`, and nothing was lost either way.
+    Misplaced { trash_name: String, restored: bool },
     /// A folder on the way to the entry is a link: refused, never followed.
     SymlinkInPath,
     /// The Trash is on another volume than the entry: refused, never copied.
@@ -32,6 +36,8 @@ pub enum MoveError {
     PermissionDenied,
     /// Every name in the Trash is taken.
     NameExhausted,
+    /// A folder on the way, or the entry, is not the one the plan recorded.
+    IdentityChanged,
     /// Anything else the system said.
     Io(ErrorKind),
 }
@@ -40,12 +46,26 @@ pub enum MoveError {
 #[derive(Debug)]
 pub struct TrashDir {
     path: PathBuf,
+    /// Test seam: runs between the move and the check after it.
+    #[cfg(test)]
+    pub(crate) after_move: Option<fn(&Path, &str)>,
+}
+
+/// A checked move: the name in the Trash and the identity found there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    pub trash_name: String,
+    pub identity_after: EntryIdent,
 }
 
 impl TrashDir {
     /// The Trash at `path`. Nothing is created and nothing is moved yet.
     pub fn at(path: impl Into<PathBuf>) -> TrashDir {
-        TrashDir { path: path.into() }
+        TrashDir {
+            path: path.into(),
+            #[cfg(test)]
+            after_move: None,
+        }
     }
 
     /// Where this Trash is.
@@ -53,19 +73,64 @@ impl TrashDir {
         &self.path
     }
 
-    /// Moves `entry` (an absolute path) into this Trash, under a name that is
-    /// not taken. Returns the name it got.
-    pub fn move_in(&self, entry: &Path) -> Result<String, MoveError> {
+    /// Moves `entry` into this Trash after checking it as the plan recorded
+    /// it (ADR 0006 §2, layer B): every folder from the top down to the parent
+    /// (`folders`) and the entry itself (`item`). Nothing is moved when a
+    /// check fails. After the move the identity found in the Trash is checked
+    /// again; a different entry is put back and reported as `Misplaced`.
+    pub fn move_checked(
+        &self,
+        entry: &Path,
+        folders: &[FolderId],
+        item: EntryIdent,
+    ) -> Result<Moved, MoveError> {
         let parent = entry.parent().ok_or(MoveError::Gone)?;
         let name = entry.file_name().ok_or(MoveError::Gone)?;
-        // Both folders are opened without following links, then everything
-        // is relative to those descriptors.
-        let from = open_dir(parent).map_err(|e| match e {
-            // A missing parent means the entry is gone with it.
-            Errno::NOENT => MoveError::Gone,
-            Errno::LOOP | Errno::NOTDIR => MoveError::SymlinkInPath,
-            other => MoveError::Io(io::Error::from(other).kind()),
-        })?;
+        let from = open_parent_checked(parent, folders)?;
+        if entry_ident(&from, name)? != item {
+            return Err(MoveError::IdentityChanged);
+        }
+        let trash_name = self.move_from(&from, name)?;
+        #[cfg(test)]
+        if let Some(hook) = self.after_move {
+            hook(&self.path, &trash_name);
+        }
+        let after = self.ident_in_trash(&trash_name)?;
+        if after == item {
+            return Ok(Moved {
+                trash_name,
+                identity_after: after,
+            });
+        }
+        let restored = self.put_back(&trash_name, &from, name).is_ok();
+        Err(MoveError::Misplaced {
+            trash_name,
+            restored,
+        })
+    }
+
+    /// The identity of the entry `name` now in this Trash.
+    pub fn ident_in_trash(&self, name: &str) -> Result<crate::entry_check::EntryIdent, MoveError> {
+        let to = open_dir(&self.path).map_err(map_errno)?;
+        crate::entry_check::entry_ident(&to, std::ffi::OsStr::new(name))
+    }
+
+    /// Puts the entry `trash_name` back into the folder `parent` as `name`,
+    /// never replacing anything there (`NOREPLACE`).
+    pub fn put_back(
+        &self,
+        trash_name: &str,
+        parent: &OwnedFd,
+        name: &std::ffi::OsStr,
+    ) -> Result<(), MoveError> {
+        let to = open_dir(&self.path).map_err(map_errno)?;
+        renameat_with(&to, trash_name, parent, name, RenameFlags::NOREPLACE).map_err(map_rename)
+    }
+
+    /// Moves the entry `name` that lives in the folder `from` (a descriptor
+    /// the caller has already checked). Everything is relative to `from`, so
+    /// the parent cannot be swapped between the check and the move.
+    pub fn move_from(&self, from: &OwnedFd, name: &std::ffi::OsStr) -> Result<String, MoveError> {
         let to = open_dir(&self.path).map_err(|e| match e {
             Errno::NOENT => MoveError::TrashUnavailable(ErrorKind::NotFound),
             Errno::LOOP | Errno::NOTDIR => MoveError::TrashUnavailable(ErrorKind::InvalidInput),
@@ -77,7 +142,7 @@ impl TrashDir {
             return Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied));
         }
         // The entry itself: a link stays a link, and it must be on this volume.
-        let st = statat(&from, name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
+        let st = statat(from, name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
         let trash_dev = trash.st_dev;
         check_same_volume(st.st_dev, trash_dev)?;
         // Try the entry's own name, then a name made unique from the time and
@@ -91,7 +156,7 @@ impl TrashDir {
             if candidate.len() > 255 {
                 continue;
             }
-            match renameat_with(&from, name, &to, candidate.as_str(), RenameFlags::NOREPLACE) {
+            match renameat_with(from, name, &to, candidate.as_str(), RenameFlags::NOREPLACE) {
                 Ok(()) => return Ok(candidate),
                 // A taken name: the Trash has it already (a folder that is not
                 // empty reports ENOTEMPTY, not EXIST, on some systems).
@@ -168,16 +233,77 @@ mod tests {
     #![allow(clippy::disallowed_methods)]
 
     use super::*;
+    use crate::entry_check::Kind;
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     /// A tempdir with `home/<rel>` for an entry and a Trash folder next to it.
     fn sandbox() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        // Canonical like a plan's paths: the temp dir sits behind `/var` on macOS.
         let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let trash = dir.path().join("trash");
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let home = root.join("home");
+        let trash = root.join("trash");
         std::fs::create_dir(&home).unwrap();
         std::fs::create_dir(&trash).unwrap();
         (dir, home, trash)
+    }
+
+    /// The folders from the top down to `parent`, read now: what a plan
+    /// records for them.
+    fn folders_of(parent: &Path) -> Vec<FolderId> {
+        let mut chain: Vec<&Path> = parent
+            .ancestors()
+            .filter(|p| !p.as_os_str().is_empty() && *p != Path::new("/"))
+            .collect();
+        chain.reverse();
+        chain
+            .into_iter()
+            .map(|p| {
+                let m = std::fs::metadata(p).unwrap();
+                (m.dev(), m.ino())
+            })
+            .collect()
+    }
+
+    /// The identity of one folder, read now: a plan's expectation covers the
+    /// folders from the home down, so a test that stops at `home` passes it.
+    fn folder_id(folder: &Path) -> FolderId {
+        let m = std::fs::metadata(folder).unwrap();
+        (m.dev(), m.ino())
+    }
+
+    /// The entry as a plan records it, read now (`dev`, `ino`, kind, links).
+    fn item_of(entry: &Path) -> EntryIdent {
+        let m = std::fs::symlink_metadata(entry).unwrap();
+        let kind = if m.file_type().is_symlink() {
+            Kind::Symlink
+        } else if m.is_dir() {
+            Kind::Dir
+        } else {
+            Kind::File
+        };
+        EntryIdent {
+            dev: m.dev(),
+            ino: m.ino(),
+            kind,
+            nlink: (kind != Kind::Dir).then(|| m.nlink() as u32),
+        }
+    }
+
+    /// A move checked against what the plan would have recorded for `entry`.
+    fn move_planned(trash: &Path, entry: &Path) -> Result<Moved, MoveError> {
+        let parent = entry.parent().unwrap();
+        TrashDir::at(trash).move_checked(entry, &folders_of(parent), item_of(entry))
+    }
+
+    /// An identity that matches nothing: for entries that must be missing.
+    fn no_item() -> EntryIdent {
+        EntryIdent {
+            dev: 0,
+            ino: 0,
+            kind: Kind::File,
+            nlink: Some(1),
+        }
     }
 
     #[test]
@@ -187,7 +313,7 @@ mod tests {
         std::fs::create_dir(&cache).unwrap();
         std::fs::write(cache.join("blob"), "data").unwrap();
         let ino = std::fs::metadata(&cache).unwrap().ino();
-        let name = TrashDir::at(&trash).move_in(&cache).unwrap();
+        let name = move_planned(&trash, &cache).unwrap().trash_name;
         assert_eq!(name, "com.example.app");
         assert!(!cache.exists(), "the entry left its place");
         let moved = trash.join(&name);
@@ -208,7 +334,7 @@ mod tests {
         let cache = home.join("cache");
         std::fs::create_dir(&cache).unwrap();
         std::fs::write(cache.join("new.txt"), "new").unwrap();
-        let name = TrashDir::at(&trash).move_in(&cache).unwrap();
+        let name = move_planned(&trash, &cache).unwrap().trash_name;
         assert_ne!(name, "cache", "the taken name is not reused");
         assert_eq!(
             std::fs::read_to_string(trash.join("cache/keep.txt")).unwrap(),
@@ -229,7 +355,7 @@ mod tests {
         let cache = home.join("cache");
         std::fs::create_dir(&cache).unwrap();
         let ino = std::fs::metadata(&cache).unwrap().ino();
-        let name = TrashDir::at(&trash).move_in(&cache).unwrap();
+        let name = move_planned(&trash, &cache).unwrap().trash_name;
         assert!(name.starts_with("cache "), "{name}");
         assert!(name.ends_with(&format!("{ino:x}")), "{name}");
         assert!(!name.ends_with(" 2"), "a counter was used first: {name}");
@@ -238,8 +364,9 @@ mod tests {
     #[test]
     fn a_missing_entry_is_gone() {
         let (_d, home, trash) = sandbox();
+        let nope = home.join("nope");
         assert_eq!(
-            TrashDir::at(&trash).move_in(&home.join("nope")),
+            TrashDir::at(&trash).move_checked(&nope, &[folder_id(&home)], no_item()),
             Err(MoveError::Gone)
         );
     }
@@ -251,7 +378,7 @@ mod tests {
         std::fs::create_dir(&cache).unwrap();
         let gone = home.join("no-trash-here");
         assert!(matches!(
-            TrashDir::at(&gone).move_in(&cache),
+            move_planned(&gone, &cache),
             Err(MoveError::TrashUnavailable(_))
         ));
         assert!(!gone.exists(), "the Trash is never created by Rain");
@@ -265,7 +392,7 @@ mod tests {
         let cache = home.join("cache");
         std::fs::write(&cache, "x").unwrap();
         assert_eq!(
-            TrashDir::at(&trash).move_in(&cache),
+            move_planned(&trash, &cache),
             Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied))
         );
         assert!(cache.exists(), "nothing was moved");
@@ -290,7 +417,11 @@ mod tests {
         let linked = home.join("linked");
         symlink(&real, &linked).unwrap();
         assert_eq!(
-            TrashDir::at(home.join("trash")).move_in(&linked.join("x")),
+            TrashDir::at(home.join("trash")).move_checked(
+                &linked.join("x"),
+                &[folder_id(&home)],
+                no_item()
+            ),
             Err(MoveError::SymlinkInPath)
         );
     }
@@ -299,7 +430,11 @@ mod tests {
     fn a_parent_folder_that_is_gone_means_the_entry_is_gone() {
         let (_d, home, trash) = sandbox();
         assert_eq!(
-            TrashDir::at(&trash).move_in(&home.join("nope").join("x")),
+            TrashDir::at(&trash).move_checked(
+                &home.join("nope").join("x"),
+                &[folder_id(&home)],
+                no_item()
+            ),
             Err(MoveError::Gone)
         );
     }
@@ -325,7 +460,7 @@ mod tests {
         let target_ino = std::fs::metadata(&target).unwrap().ino();
         assert_ne!(link_ino, target_ino);
         std::fs::write(trash.join("link"), "taken").unwrap();
-        let name = TrashDir::at(&trash).move_in(&link).unwrap();
+        let name = move_planned(&trash, &link).unwrap().trash_name;
         assert!(
             name.ends_with(&format!("{link_ino:x}")),
             "name {name} should carry the link's inode"
@@ -341,12 +476,116 @@ mod tests {
         std::fs::write(target.join("keep"), "x").unwrap();
         let link = home.join("link");
         symlink(&target, &link).unwrap();
-        let name = TrashDir::at(&trash).move_in(&link).unwrap();
+        let name = move_planned(&trash, &link).unwrap().trash_name;
         assert!(std::fs::symlink_metadata(trash.join(&name))
             .unwrap()
             .file_type()
             .is_symlink());
         assert_eq!(std::fs::read_to_string(target.join("keep")).unwrap(), "x");
+    }
+
+    /// `home/real/b/item`, with the plan's expectations for it.
+    fn real_b_item(home: &Path) -> (PathBuf, Vec<FolderId>, EntryIdent) {
+        let b = home.join("real").join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        let item = b.join("item");
+        std::fs::write(&item, "x").unwrap();
+        let folders = vec![
+            folder_id(home),
+            folder_id(&home.join("real")),
+            folder_id(&b),
+        ];
+        (item.clone(), folders, item_of(&item))
+    }
+
+    #[test]
+    fn an_entry_reached_through_a_link_in_its_path_is_refused_and_not_moved() {
+        let (_d, home, trash) = sandbox();
+        let (item, folders, ident) = real_b_item(&home);
+        symlink(home.join("real"), home.join("link")).unwrap();
+        let through_link = home.join("link").join("b").join("item");
+        assert_eq!(
+            TrashDir::at(&trash).move_checked(&through_link, &folders, ident),
+            Err(MoveError::SymlinkInPath)
+        );
+        assert!(item.exists(), "nothing was moved");
+    }
+
+    #[test]
+    fn an_entry_that_is_not_the_planned_one_is_refused_and_not_moved() {
+        let (_d, home, trash) = sandbox();
+        let (item, folders, mut ident) = real_b_item(&home);
+        ident.ino += 1;
+        assert_eq!(
+            TrashDir::at(&trash).move_checked(&item, &folders, ident),
+            Err(MoveError::IdentityChanged)
+        );
+        assert!(item.exists(), "nothing was moved");
+    }
+
+    #[test]
+    fn a_folder_on_the_way_that_is_not_the_planned_one_is_refused() {
+        let (_d, home, trash) = sandbox();
+        let (item, mut folders, ident) = real_b_item(&home);
+        folders[1].1 += 1;
+        assert_eq!(
+            TrashDir::at(&trash).move_checked(&item, &folders, ident),
+            Err(MoveError::IdentityChanged)
+        );
+        assert!(item.exists(), "nothing was moved");
+    }
+
+    #[test]
+    fn a_parent_with_dot_dot_is_refused_and_not_moved() {
+        let (_d, home, trash) = sandbox();
+        let (item, folders, ident) = real_b_item(&home);
+        let odd = home
+            .join("..")
+            .join("home")
+            .join("real")
+            .join("b")
+            .join("item");
+        assert_eq!(
+            TrashDir::at(&trash).move_checked(&odd, &folders, ident),
+            Err(MoveError::IdentityChanged)
+        );
+        assert!(item.exists(), "nothing was moved");
+    }
+
+    fn another_entry_lands_under_the_moved_name(dir: &Path, name: &str) {
+        let moved = dir.join(name);
+        std::fs::rename(&moved, dir.join("held-away")).unwrap();
+        std::fs::write(&moved, "another entry").unwrap();
+    }
+
+    #[test]
+    fn a_different_entry_under_the_moved_name_is_put_back_and_reported() {
+        let (_d, home, trash) = sandbox();
+        let (item, folders, ident) = real_b_item(&home);
+        let mut t = TrashDir::at(&trash);
+        t.after_move = Some(another_entry_lands_under_the_moved_name);
+        match t.move_checked(&item, &folders, ident) {
+            Err(MoveError::Misplaced {
+                trash_name,
+                restored,
+            }) => {
+                assert!(restored, "the wrong entry must be put back");
+                assert_eq!(std::fs::read_to_string(&item).unwrap(), "another entry");
+                assert!(!trash.join(trash_name).exists());
+            }
+            other => panic!("expected Misplaced, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_checked_move_reports_the_identity_found_in_the_trash() {
+        let (_d, home, trash) = sandbox();
+        let (item, folders, ident) = real_b_item(&home);
+        let moved = TrashDir::at(&trash)
+            .move_checked(&item, &folders, ident)
+            .unwrap();
+        assert_eq!(moved.identity_after, ident);
+        assert!(trash.join(&moved.trash_name).exists());
     }
 
     #[test]
@@ -356,7 +595,7 @@ mod tests {
         std::fs::create_dir(&locked).unwrap();
         std::fs::write(locked.join("f"), "x").unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let out = TrashDir::at(&trash).move_in(&locked);
+        let out = move_planned(&trash, &locked).map(|m| m.trash_name);
         // Restore before any assertion so the tempdir can be removed.
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(out, Err(MoveError::PermissionDenied));
