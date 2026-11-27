@@ -6,8 +6,11 @@
 //! tempdir. The Trash folder is never created; if it is missing, the move
 //! is refused as `TrashUnavailable`.
 
-use rustix::fs::{fstat, openat, renameat_with, statat, AtFlags, Mode, OFlags, RenameFlags};
+use rustix::fs::{
+    fstat, openat, renameat_with, statat, AtFlags, Mode, OFlags, RawMode, RenameFlags,
+};
 use rustix::io::Errno;
+use rustix::process::getuid;
 use std::io::{self, ErrorKind};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
@@ -19,6 +22,8 @@ pub enum MoveError {
     Gone,
     /// The Trash folder is missing or is not safe to write to.
     TrashUnavailable(ErrorKind),
+    /// A folder on the way to the entry is a link: refused, never followed.
+    SymlinkInPath,
     /// The Trash is on another volume than the entry: refused, never copied.
     OtherVolume,
     /// The system does not do a rename that refuses to replace.
@@ -55,14 +60,25 @@ impl TrashDir {
         let name = entry.file_name().ok_or(MoveError::Gone)?;
         // Both folders are opened without following links, then everything
         // is relative to those descriptors.
-        let from = open_dir(parent)?;
-        let to = open_dir(&self.path).map_err(|e| match e {
-            MoveError::Gone => MoveError::TrashUnavailable(ErrorKind::NotFound),
-            other => other,
+        let from = open_dir(parent).map_err(|e| match e {
+            // A missing parent means the entry is gone with it.
+            Errno::NOENT => MoveError::Gone,
+            Errno::LOOP | Errno::NOTDIR => MoveError::SymlinkInPath,
+            other => MoveError::Io(io::Error::from(other).kind()),
         })?;
+        let to = open_dir(&self.path).map_err(|e| match e {
+            Errno::NOENT => MoveError::TrashUnavailable(ErrorKind::NotFound),
+            Errno::LOOP | Errno::NOTDIR => MoveError::TrashUnavailable(ErrorKind::InvalidInput),
+            other => MoveError::Io(io::Error::from(other).kind()),
+        })?;
+        // The Trash must be the user's and not writable by group or others.
+        let trash = fstat(&to).map_err(map_errno)?;
+        if !trash_is_safe(trash.st_mode, trash.st_uid, getuid().as_raw()) {
+            return Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied));
+        }
         // The entry itself: a link stays a link, and it must be on this volume.
         let st = statat(&from, name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
-        let trash_dev = fstat(&to).map_err(map_errno)?.st_dev;
+        let trash_dev = trash.st_dev;
         check_same_volume(st.st_dev, trash_dev)?;
         // Try the entry's own name, then a name made unique from the time and
         // the inode, and only then a counter (ADR 0006 §3).
@@ -88,24 +104,22 @@ impl TrashDir {
 }
 
 /// A folder opened without following a link, and checked to be a folder.
-fn open_dir(path: &Path) -> Result<OwnedFd, MoveError> {
+fn open_dir(path: &Path) -> Result<OwnedFd, Errno> {
     let fd = openat(
         rustix::fs::CWD,
         path,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
-    )
-    .map_err(|e| match e {
-        // A missing folder is not the entry being gone: the Trash is unavailable.
-        Errno::NOENT => MoveError::TrashUnavailable(ErrorKind::NotFound),
-        Errno::LOOP | Errno::NOTDIR => MoveError::TrashUnavailable(ErrorKind::InvalidInput),
-        other => MoveError::Io(io::Error::from(other).kind()),
-    })?;
+    )?;
     Ok(fd)
 }
 
-/// A name that is not used by the others: the name, the hour and minute and
-/// second, and the inode, so two equal names do not collide.
+/// The Trash is safe to move into only when the user owns it and neither
+/// the group nor anyone else can write to it.
+fn trash_is_safe(mode: RawMode, owner: u32, me: u32) -> bool {
+    owner == me && mode & 0o022 == 0
+}
+
 /// An entry on another volume cannot be renamed into the Trash.
 fn check_same_volume<T: PartialEq>(entry_dev: T, trash_dev: T) -> Result<(), MoveError> {
     if entry_dev == trash_dev {
@@ -115,6 +129,8 @@ fn check_same_volume<T: PartialEq>(entry_dev: T, trash_dev: T) -> Result<(), Mov
     }
 }
 
+/// A name that is not used by the others: the name, the hour and minute and
+/// second, and the inode, so two equal names do not collide.
 fn unique_name(name: &std::ffi::OsStr, ino: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -240,6 +256,52 @@ mod tests {
         ));
         assert!(!gone.exists(), "the Trash is never created by Rain");
         assert!(cache.exists(), "nothing was moved");
+    }
+
+    #[test]
+    fn a_trash_that_others_can_write_to_is_unavailable_and_nothing_moves() {
+        let (_d, home, trash) = sandbox();
+        std::fs::set_permissions(&trash, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let cache = home.join("cache");
+        std::fs::write(&cache, "x").unwrap();
+        assert_eq!(
+            TrashDir::at(&trash).move_in(&cache),
+            Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied))
+        );
+        assert!(cache.exists(), "nothing was moved");
+    }
+
+    #[test]
+    fn a_trash_is_safe_only_when_owned_by_the_user_and_not_writable_by_others() {
+        const DIR: RawMode = 0o040000;
+        assert!(trash_is_safe(DIR | 0o700, 501, 501));
+        assert!(trash_is_safe(DIR | 0o755, 501, 501));
+        assert!(!trash_is_safe(DIR | 0o777, 501, 501));
+        assert!(!trash_is_safe(DIR | 0o775, 501, 501));
+        assert!(!trash_is_safe(DIR | 0o757, 501, 501));
+        assert!(!trash_is_safe(DIR | 0o700, 0, 501));
+    }
+
+    #[test]
+    fn a_parent_folder_that_is_a_link_is_a_symlink_in_path() {
+        let (_d, home, _trash) = sandbox();
+        let real = home.join("real");
+        std::fs::create_dir(&real).unwrap();
+        let linked = home.join("linked");
+        symlink(&real, &linked).unwrap();
+        assert_eq!(
+            TrashDir::at(home.join("trash")).move_in(&linked.join("x")),
+            Err(MoveError::SymlinkInPath)
+        );
+    }
+
+    #[test]
+    fn a_parent_folder_that_is_gone_means_the_entry_is_gone() {
+        let (_d, home, trash) = sandbox();
+        assert_eq!(
+            TrashDir::at(&trash).move_in(&home.join("nope").join("x")),
+            Err(MoveError::Gone)
+        );
     }
 
     #[test]

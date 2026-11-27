@@ -292,6 +292,34 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_with_group_or_other_access_or_no_owner_access_is_refused() {
+        for mode in [0o600, 0o500, 0o650] {
+            let (_dir, path) = folder(mode);
+            assert_eq!(
+                CleanLogFile::open(&path).unwrap_err(),
+                LogError::UnsafeFolder,
+                "{mode:o}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_with_group_or_other_access_or_executable_is_refused() {
+        for mode in [0o644, 0o700, 0o660] {
+            let (_dir, path) = folder(0o700);
+            std::fs::write(&path, "x\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            let log = CleanLogFile::open(&path).unwrap();
+            assert_eq!(
+                log.append("{\"a\":1}"),
+                Err(LogError::UnsafeFile),
+                "{mode:o}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "x\n");
+        }
+    }
+
+    #[test]
     fn a_file_with_another_mode_is_refused() {
         let (_dir, path) = folder(0o700);
         std::fs::write(&path, "x\n").unwrap();
