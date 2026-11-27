@@ -481,24 +481,41 @@ mod tests {
         assert!(!alive(pid), "grandchild {pid} survived");
     }
 
+    /// A grandchild that left the process group (`setsid`) and keeps the
+    /// pipes open must not make the runner wait for it: the group kill does
+    /// not reach it, so the readers have to give up on their own.
+    ///
+    /// The scenario has to be exact. If the shell ended before the
+    /// grandchild had left the group, the group kill would take the
+    /// grandchild too, the pipes would close and the call would return
+    /// `Ok`: a different case, and a race that failed on slow machines. So
+    /// the grandchild is slowed down on purpose, and the script waits for the
+    /// proof that it has left the group (its pid file) before it ends. Then
+    /// the pipes are held no matter how fast the machine is, and the only
+    /// correct answer is `Timeout`.
     #[test]
     fn detached_grandchild_holding_pipes_does_not_hang() {
-        // setsid escapes the group kill; the readers must still give up.
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("pid");
         let s = script(
             dir.path(),
             "detach",
             &format!(
-                "/usr/bin/perl -e 'use POSIX; fork and exit; POSIX::setsid(); \
-                 open F, q(>), q({}); print F $$; close F; exec q(/bin/sleep), 30'\n\
+                // The grandchild waits 0.3 s, leaves the group, writes its pid
+                // and becomes `sleep 30`. The shell waits (at most 10 s) for the
+                // pid, then ends: from then on only the grandchild holds the pipes.
+                "/usr/bin/perl -e 'use POSIX; fork and exit; select(undef,undef,undef,0.3); \
+                 POSIX::setsid(); open F, q(>), q({pid}); print F $$; close F; \
+                 exec q(/bin/sleep), 30'\n\
+                 n=0\n\
+                 while [ ! -s {pid} ] && [ $n -lt 200 ]; do /bin/sleep 0.05; n=$((n+1)); done\n\
                  echo started",
-                pidfile.display()
+                pid = pidfile.display()
             ),
             0o700,
         );
         let start = Instant::now();
-        let res = go(&req(s, &[], Duration::from_millis(500)));
+        let res = go(&req(s, &[], Duration::from_secs(2)));
         let took = start.elapsed();
         if let Some(pid) = std::fs::read_to_string(&pidfile)
             .ok()
@@ -507,7 +524,8 @@ mod tests {
         {
             let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
         }
-        assert!(took < Duration::from_secs(5), "hung for {took:?}");
+        // The grandchild sleeps 30 s: waiting for it is what must not happen.
+        assert!(took < Duration::from_secs(6), "hung for {took:?}");
         assert_eq!(res, Err(RunError::Timeout));
     }
 
