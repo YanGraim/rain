@@ -16,6 +16,8 @@ mod tools;
 pub mod clean_log;
 /// The real Trash (ADR 0006 §3): moves an entry with `renameat` and `NOREPLACE`.
 #[cfg(unix)]
+pub mod entry_check;
+#[cfg(unix)]
 pub mod trash_dir;
 
 #[cfg(any(test, feature = "testing"))]

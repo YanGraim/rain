@@ -32,6 +32,8 @@ pub enum MoveError {
     PermissionDenied,
     /// Every name in the Trash is taken.
     NameExhausted,
+    /// A folder on the way, or the entry, is not the one the plan recorded.
+    IdentityChanged,
     /// Anything else the system said.
     Io(ErrorKind),
 }
@@ -58,14 +60,37 @@ impl TrashDir {
     pub fn move_in(&self, entry: &Path) -> Result<String, MoveError> {
         let parent = entry.parent().ok_or(MoveError::Gone)?;
         let name = entry.file_name().ok_or(MoveError::Gone)?;
-        // Both folders are opened without following links, then everything
-        // is relative to those descriptors.
         let from = open_dir(parent).map_err(|e| match e {
             // A missing parent means the entry is gone with it.
             Errno::NOENT => MoveError::Gone,
             Errno::LOOP | Errno::NOTDIR => MoveError::SymlinkInPath,
             other => MoveError::Io(io::Error::from(other).kind()),
         })?;
+        self.move_from(&from, name)
+    }
+
+    /// The identity of the entry `name` now in this Trash.
+    pub fn ident_in_trash(&self, name: &str) -> Result<crate::entry_check::EntryIdent, MoveError> {
+        let to = open_dir(&self.path).map_err(map_errno)?;
+        crate::entry_check::entry_ident(&to, std::ffi::OsStr::new(name))
+    }
+
+    /// Puts the entry `trash_name` back into the folder `parent` as `name`,
+    /// never replacing anything there (`NOREPLACE`).
+    pub fn put_back(
+        &self,
+        trash_name: &str,
+        parent: &OwnedFd,
+        name: &std::ffi::OsStr,
+    ) -> Result<(), MoveError> {
+        let to = open_dir(&self.path).map_err(map_errno)?;
+        renameat_with(&to, trash_name, parent, name, RenameFlags::NOREPLACE).map_err(map_rename)
+    }
+
+    /// Moves the entry `name` that lives in the folder `from` (a descriptor
+    /// the caller has already checked). Everything is relative to `from`, so
+    /// the parent cannot be swapped between the check and the move.
+    pub fn move_from(&self, from: &OwnedFd, name: &std::ffi::OsStr) -> Result<String, MoveError> {
         let to = open_dir(&self.path).map_err(|e| match e {
             Errno::NOENT => MoveError::TrashUnavailable(ErrorKind::NotFound),
             Errno::LOOP | Errno::NOTDIR => MoveError::TrashUnavailable(ErrorKind::InvalidInput),
@@ -77,7 +102,7 @@ impl TrashDir {
             return Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied));
         }
         // The entry itself: a link stays a link, and it must be on this volume.
-        let st = statat(&from, name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
+        let st = statat(from, name, AtFlags::SYMLINK_NOFOLLOW).map_err(map_errno)?;
         let trash_dev = trash.st_dev;
         check_same_volume(st.st_dev, trash_dev)?;
         // Try the entry's own name, then a name made unique from the time and
@@ -91,7 +116,7 @@ impl TrashDir {
             if candidate.len() > 255 {
                 continue;
             }
-            match renameat_with(&from, name, &to, candidate.as_str(), RenameFlags::NOREPLACE) {
+            match renameat_with(from, name, &to, candidate.as_str(), RenameFlags::NOREPLACE) {
                 Ok(()) => return Ok(candidate),
                 // A taken name: the Trash has it already (a folder that is not
                 // empty reports ENOTEMPTY, not EXIST, on some systems).
