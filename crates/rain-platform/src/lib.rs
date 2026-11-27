@@ -11,6 +11,13 @@ mod macos;
 #[cfg(unix)]
 mod tools;
 
+/// The cleaning log (ADR 0006 §5): an append-only file of JSON lines.
+#[cfg(unix)]
+pub mod clean_log;
+/// The real Trash (ADR 0006 §3): moves an entry with `renameat` and `NOREPLACE`.
+#[cfg(unix)]
+pub mod trash_dir;
+
 #[cfg(any(test, feature = "testing"))]
 mod fake;
 
