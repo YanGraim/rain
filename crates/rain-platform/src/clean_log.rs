@@ -118,6 +118,15 @@ fn log_file_is_safe(mode: RawMode, owner: u32, me: u32) -> bool {
     FileType::from_raw_mode(mode) == FileType::RegularFile && owner == me && mode & 0o777 == 0o600
 }
 
+/// Creates the log folder with mode 0700 when it is missing. An existing
+/// folder is left as it is: opening the log checks it.
+pub fn create_private_folder(path: &Path) -> Result<(), LogError> {
+    match rustix::fs::mkdirat(rustix::fs::CWD, path, Mode::from_raw_mode(0o700)) {
+        Ok(()) | Err(rustix::io::Errno::EXIST) => Ok(()),
+        Err(e) => Err(LogError::Io(io::Error::from(e).kind())),
+    }
+}
+
 /// The folder: a real directory the user owns, with exactly 0700, opened
 /// without following a link.
 fn open_dir(dir: &Path) -> Result<OwnedFd, LogError> {
@@ -154,6 +163,17 @@ mod tests {
 
     fn mode_of(p: &Path) -> u32 {
         std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn the_log_folder_is_created_0700_and_an_existing_one_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Rain");
+        create_private_folder(&folder).unwrap();
+        assert_eq!(mode_of(&folder), 0o700);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_private_folder(&folder).unwrap();
+        assert_eq!(mode_of(&folder), 0o755, "an existing folder is not changed");
     }
 
     #[test]
