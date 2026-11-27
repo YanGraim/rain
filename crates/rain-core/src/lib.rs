@@ -1,6 +1,7 @@
 //! Rain core: scanner, rules and protection list.
 
 pub mod clock;
+pub mod executor;
 pub mod fs;
 pub mod messages;
 pub mod model;
