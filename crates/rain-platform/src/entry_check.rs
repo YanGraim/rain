@@ -40,13 +40,15 @@ pub fn open_parent_checked(parent: &Path, expect: &[FolderId]) -> Result<OwnedFd
     if !parent.is_absolute() || expect.is_empty() {
         return Err(MoveError::IdentityChanged);
     }
-    let names: Vec<&OsStr> = parent
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(n) => Some(n),
-            _ => None,
-        })
-        .collect();
+    let mut names: Vec<&OsStr> = Vec::new();
+    for component in parent.components() {
+        match component {
+            Component::Normal(n) => names.push(n),
+            Component::RootDir | Component::Prefix(_) => {}
+            // `.` and `..` would make the chain differ from what was planned.
+            Component::CurDir | Component::ParentDir => return Err(MoveError::IdentityChanged),
+        }
+    }
     let first_checked = names
         .len()
         .checked_sub(expect.len())
