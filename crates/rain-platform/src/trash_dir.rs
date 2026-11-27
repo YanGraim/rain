@@ -109,6 +109,22 @@ impl TrashDir {
         })
     }
 
+    /// Whether this Trash can be opened and is safe to move into. Nothing is
+    /// moved; a Trash the system denies is reported as unavailable.
+    pub fn probe(&self) -> Result<(), MoveError> {
+        let to = open_dir(&self.path).map_err(|e| match e {
+            Errno::NOENT => MoveError::TrashUnavailable(ErrorKind::NotFound),
+            Errno::ACCESS | Errno::PERM => MoveError::TrashUnavailable(ErrorKind::PermissionDenied),
+            Errno::LOOP | Errno::NOTDIR => MoveError::TrashUnavailable(ErrorKind::InvalidInput),
+            other => MoveError::Io(io::Error::from(other).kind()),
+        })?;
+        let trash = fstat(&to).map_err(map_errno)?;
+        if !trash_is_safe(trash.st_mode, trash.st_uid, getuid().as_raw()) {
+            return Err(MoveError::TrashUnavailable(ErrorKind::PermissionDenied));
+        }
+        Ok(())
+    }
+
     /// The identity of the entry `name` now in this Trash.
     pub fn ident_in_trash(&self, name: &str) -> Result<crate::entry_check::EntryIdent, MoveError> {
         let to = open_dir(&self.path).map_err(map_errno)?;

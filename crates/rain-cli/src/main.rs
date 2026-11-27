@@ -1,8 +1,11 @@
 //! `rain`: the command-line front end.
 
 mod args;
+mod clean_log;
+mod clean_run;
 mod output;
 mod tools;
+mod trash;
 
 use args::{CleanArgs, Command, InvalidPath, OutsideHome, ScanArgs};
 use output::escape_for_terminal;
@@ -29,6 +32,8 @@ use std::time::SystemTime;
 const EXIT_RUNTIME: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_CANCELLED: u8 = 130;
+/// ADR 0006 §7: the Trash refused access (macOS privacy setting).
+const EXIT_TRASH_DENIED: u8 = 5;
 
 /// The real clock.
 struct SystemClock;
@@ -46,6 +51,11 @@ enum CliError {
     Usage(String),
     /// FR-012: exit 1.
     Runtime(String),
+    /// ADR 0006 §7: exit 5, the Trash cannot be used; the message is localized.
+    TrashDenied(String),
+    /// A real run that stopped or did not finish cleanly: the summary is
+    /// printed on stdout and the process ends with `code`.
+    Finished { code: u8, text: String },
     /// FR-011: exit 130.
     Cancelled,
 }
@@ -55,6 +65,8 @@ impl CliError {
         match self {
             CliError::Usage(_) => EXIT_USAGE,
             CliError::Runtime(_) => EXIT_RUNTIME,
+            CliError::TrashDenied(_) => EXIT_TRASH_DENIED,
+            CliError::Finished { code, .. } => *code,
             CliError::Cancelled => EXIT_CANCELLED,
         }
     }
@@ -184,6 +196,14 @@ fn scan_output(
     run_scan(args, env, catalog, cancel).and_then(|r| report_text(&r, args.json, catalog))
 }
 
+/// The message for a Trash that refuses access: names the program that must
+/// be given Full Disk Access (escaped, it comes from the environment).
+fn trash_denied_message(catalog: &Catalog, app: &str) -> String {
+    catalog
+        .get(MessageKey::CleanTrashDenied)
+        .replace("{app}", &output::escape_for_terminal(app))
+}
+
 /// `rain clean --dry-run` (ADR 0006): scans, makes the plan and shows it.
 /// Nothing is moved or deleted: there is no executor yet.
 fn clean_output(
@@ -192,6 +212,12 @@ fn clean_output(
     catalog: &Catalog,
     cancel: &AtomicBool,
 ) -> Result<String, CliError> {
+    // The real run is off until the Finder check (see clean_run).
+    if !args.dry_run && !clean_run::REAL_CLEAN_ENABLED {
+        return Err(CliError::Runtime(
+            catalog.get(MessageKey::CleanRealDisabled).to_owned(),
+        ));
+    }
     let ids = args
         .items
         .iter()
@@ -238,11 +264,27 @@ fn clean_output(
     };
     let plan = Plan::build(&report, &selection, Confirmations::Preview, &ctx)
         .map_err(|e| CliError::Runtime(plan_error_message(&e, catalog)))?;
-    if args.json {
-        Ok(format!("{}\n", plan.to_json()))
-    } else {
-        Ok(output::render_plan_preview(&plan, catalog))
+    if args.dry_run {
+        // The plan is recorded so a real run of it is allowed (ADR 0006 §6).
+        clean_run::record_dry_run(env, &plan);
+        return if args.json {
+            Ok(format!("{}\n", plan.to_json()))
+        } else {
+            Ok(output::render_plan_preview(&plan, catalog))
+        };
     }
+    let user_paths = args::resolve_paths(env.fs, &env.cwd, &args.paths).unwrap_or_default();
+    clean_run::real_run(
+        env,
+        catalog,
+        cancel,
+        &report,
+        &protect,
+        &home,
+        &plan,
+        args.min_age_days,
+        user_paths,
+    )
 }
 
 /// An item id as the JSON report prints it: 16 hexadecimal digits.
@@ -316,7 +358,8 @@ fn report_text(report: &ScanReport, json: bool, catalog: &Catalog) -> Result<Str
 /// line or the disk was escaped when the error was built (FR-010).
 fn error_message(e: &CliError, catalog: &Catalog) -> String {
     match e {
-        CliError::Usage(msg) | CliError::Runtime(msg) => msg.clone(),
+        CliError::Usage(msg) | CliError::Runtime(msg) | CliError::TrashDenied(msg) => msg.clone(),
+        CliError::Finished { text, .. } => text.clone(),
         CliError::Cancelled => catalog.get(MessageKey::ScanCancelled).to_string(),
     }
 }
@@ -373,6 +416,10 @@ fn main() -> anyhow::Result<ExitCode> {
         Ok(text) => {
             print!("{text}");
             Ok(ExitCode::SUCCESS)
+        }
+        Err(CliError::Finished { code, text }) => {
+            print!("{text}");
+            Ok(ExitCode::from(code))
         }
         Err(e) => {
             eprintln!("{}", error_message(&e, &catalog));
@@ -880,6 +927,36 @@ mod tests {
             clean_output(&clean_args(argv), &env, catalog, &AtomicBool::new(false))
         }
 
+        /// Without `--dry-run` the real run is refused before anything else:
+        /// no scan, nothing moved, the localized message, exit 1.
+        #[test]
+        fn a_real_clean_is_refused_until_the_finder_check() {
+            let catalog = Catalog::en().unwrap();
+            let fs = fs_with_medium_and_high();
+            let platform = platform(Some(HOME));
+            let env = Env {
+                platform: &platform,
+                fs: &fs,
+                clock: &clock(),
+                tools: &rain_core::tools::NoTools,
+                cwd: PathBuf::from(HOME),
+            };
+            let real = CleanArgs {
+                rules: vec!["sys.logs".to_owned()],
+                paths: Vec::new(),
+                min_age_days: 30,
+                json: false,
+                dry_run: false,
+                items: Vec::new(),
+            };
+            let err = clean_output(&real, &env, &catalog, &AtomicBool::new(false)).unwrap_err();
+            assert_eq!(err.exit_code(), 1);
+            assert_eq!(
+                error_message(&err, &catalog),
+                catalog.get(MessageKey::CleanRealDisabled)
+            );
+        }
+
         fn clean(argv: &[&str]) -> Result<String, CliError> {
             clean_with(
                 argv,
@@ -1248,5 +1325,38 @@ mod tests {
                 FakeReply::Error(ToolError::NotInstalled)
             )));
         }
+    }
+}
+
+#[cfg(test)]
+mod trash_denied_message {
+    use super::*;
+    use rain_core::messages::Locale;
+
+    #[test]
+    fn names_the_app_and_says_full_disk_access_in_each_language() {
+        let wanted = [
+            "Full Disk Access",
+            "Acceso total al disco",
+            "Acesso Total ao Disco",
+        ];
+        for (locale, phrase) in Locale::ALL.iter().zip(wanted) {
+            let catalog = Catalog::for_locale(*locale).unwrap();
+            let msg = trash_denied_message(&catalog, "Terminal");
+            assert!(msg.contains("Terminal"), "{locale:?}: {msg}");
+            assert!(msg.contains(phrase), "{locale:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_denied_trash_exits_with_5() {
+        assert_eq!(CliError::TrashDenied(String::new()).exit_code(), 5);
+    }
+
+    #[test]
+    fn the_app_name_is_escaped_before_it_reaches_the_terminal() {
+        let catalog = Catalog::en().unwrap();
+        let msg = trash_denied_message(&catalog, "Term\u{202E}inal");
+        assert!(!msg.contains('\u{202E}'), "{msg}");
     }
 }

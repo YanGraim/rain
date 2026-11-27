@@ -37,8 +37,8 @@ pub struct ScanArgs {
     pub json: bool,
 }
 
-/// `rain clean`. For now only `--dry-run` exists: it is required, so no way
-/// of running this command moves or deletes anything (ADR 0006).
+/// `rain clean`. Without `--dry-run` the real run is refused until the
+/// Finder check (see `clean_run::REAL_CLEAN_ENABLED`).
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct CleanArgs {
     #[arg(long = "rule", value_name = "ID")]
@@ -49,8 +49,7 @@ pub struct CleanArgs {
     pub min_age_days: u32,
     #[arg(long)]
     pub json: bool,
-    /// Required until the executor exists.
-    #[arg(long = "dry-run", required = true)]
+    #[arg(long = "dry-run")]
     pub dry_run: bool,
     /// Item ids (as in the JSON report); none means the preselected rules.
     #[arg(long = "item", value_name = "ID")]
@@ -259,18 +258,18 @@ mod tests {
         assert_eq!(err.exit_code(), 2);
     }
 
-    // ADR 0006: until the executor exists, `rain clean` cannot run without
-    // `--dry-run`: there is no way of moving or deleting anything.
+    // The parser accepts `clean` without `--dry-run`; the command refuses the
+    // real run itself while the Finder check is pending (clean_run).
     #[test]
-    fn clean_cannot_run_without_dry_run() {
+    fn clean_without_dry_run_parses_as_a_real_run_request() {
         for argv in [
             &[][..],
             &["--json"],
             &["--item", "00000000000000ff"],
             &["--rule", "sys.logs"],
         ] {
-            let err = clean_args(argv).unwrap_err();
-            assert_eq!(err.exit_code(), 2, "{argv:?}");
+            let args = clean_args(argv).unwrap();
+            assert!(!args.dry_run, "{argv:?}");
         }
     }
 
