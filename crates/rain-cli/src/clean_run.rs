@@ -131,6 +131,32 @@ fn ask(plan: &Plan, catalog: &Catalog) -> Result<(Vec<ItemId>, Selection), CliEr
     Ok((accepted_ids, selection))
 }
 
+/// The Trash must open and be safe to move into: a denied one is reported
+/// as `TrashDenied` (exit 5), any other problem as a stop.
+pub fn check_trash(trash: &PlatformTrash, catalog: &Catalog) -> Result<(), CliError> {
+    match trash.probe() {
+        Ok(()) => Ok(()),
+        Err(TrashError::TrashUnavailable(io::ErrorKind::PermissionDenied)) => Err(
+            CliError::TrashDenied(crate::trash_denied_message(catalog, &running_app())),
+        ),
+        Err(_) => Err(CliError::Runtime(
+            catalog.get(MessageKey::CleanStoppedTrash).to_owned(),
+        )),
+    }
+}
+
+/// The final plan of a real run: every item that needs a confirmation must
+/// be in the selection, or the plan is refused (`Required`).
+pub fn final_plan(
+    report: &ScanReport,
+    selection: &Selection,
+    ctx: &BuildContext,
+    catalog: &Catalog,
+) -> Result<Plan, CliError> {
+    Plan::build(report, selection, Confirmations::Required, ctx)
+        .map_err(|e| CliError::Runtime(crate::plan_error_message(&e, catalog)))
+}
+
 /// The real run of `rain clean`. Returns the text to print on success;
 /// a stop or a non-zero outcome is `CliError::Finished`.
 #[allow(clippy::too_many_arguments)]
@@ -148,20 +174,7 @@ pub fn real_run(
     // 1. The Trash must open before anything is asked.
     let trash_path = home.join(".Trash");
     let trash = PlatformTrash::at(&trash_path);
-    match trash.probe() {
-        Ok(()) => {}
-        Err(TrashError::TrashUnavailable(io::ErrorKind::PermissionDenied)) => {
-            return Err(CliError::TrashDenied(crate::trash_denied_message(
-                catalog,
-                &running_app(),
-            )));
-        }
-        Err(_) => {
-            return Err(CliError::Runtime(
-                catalog.get(MessageKey::CleanStoppedTrash).to_owned(),
-            ));
-        }
-    }
+    check_trash(&trash, catalog)?;
 
     // 2. Ask for each item that needs a confirmation.
     let (accepted_ids, selection) = ask(preview, catalog)?;
@@ -178,8 +191,7 @@ pub fn real_run(
         clock: env.clock,
         home,
     };
-    let plan = Plan::build(report, &selection, Confirmations::Required, &ctx)
-        .map_err(|e| CliError::Runtime(crate::plan_error_message(&e, catalog)))?;
+    let plan = final_plan(report, &selection, &ctx, catalog)?;
 
     // 4. The gate: the dry run of this exact plan, or a finished real run.
     let logs = env
@@ -297,10 +309,27 @@ fn finish(report: &RunReport, catalog: &Catalog) -> Result<String, CliError> {
 
 #[cfg(test)]
 mod tests {
+    // Tests build a throwaway Trash inside a tempdir only.
+    #![allow(clippy::disallowed_methods)]
+
     use super::*;
     use rain_core::executor::{ExitCode, Stopped};
     use rain_core::messages::Locale;
     use std::ffi::OsString;
+
+    #[test]
+    fn a_trash_others_can_write_to_is_refused_as_denied_with_code_5() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(dir.path()).unwrap();
+        let trash = home.join(".Trash");
+        std::fs::create_dir(&trash).unwrap();
+        std::fs::set_permissions(&trash, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let catalog = Catalog::en().unwrap();
+        let err = check_trash(&PlatformTrash::at(&trash), &catalog).unwrap_err();
+        assert_eq!(err.exit_code(), 5);
+        assert!(matches!(err, CliError::TrashDenied(_)));
+    }
 
     #[test]
     fn only_an_explicit_yes_accepts_an_item() {

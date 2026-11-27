@@ -957,6 +957,63 @@ mod tests {
             );
         }
 
+        /// The real run builds its plan with `Required`: a medium item nobody
+        /// confirmed is refused, and the same item confirmed is accepted.
+        #[test]
+        fn the_real_plan_refuses_an_unconfirmed_medium_item() {
+            use rain_core::plan::{BuildContext, Confirmation, Confirmations, Plan, Selection};
+            let catalog = Catalog::en().unwrap();
+            let fs = fs_with_medium_and_high();
+            let platform = platform(Some(HOME));
+            let env = Env {
+                platform: &platform,
+                fs: &fs,
+                clock: &clock(),
+                tools: &rain_core::tools::NoTools,
+                cwd: PathBuf::from(HOME),
+            };
+            let scan = ScanArgs {
+                rules: vec!["pkg.go-mod".to_owned()],
+                paths: Vec::new(),
+                min_age_days: 0,
+                json: false,
+            };
+            let report = run_scan(&scan, &env, &catalog, &AtomicBool::new(false)).unwrap();
+            let protect = ProtectList::builtin(&platform)
+                .unwrap()
+                .with_identities(&fs);
+            let home = PathBuf::from(HOME);
+            let ctx = BuildContext {
+                fs: &fs,
+                protect: &protect,
+                clock: &clock(),
+                home: &home,
+            };
+            // The preview marks, as pending, the item that needs a confirmation.
+            let all = Selection {
+                ids: report.items.iter().map(|i| i.id).collect(),
+                ..Selection::default()
+            };
+            let preview = Plan::build(&report, &all, Confirmations::Preview, &ctx).unwrap();
+            let medium = preview
+                .items
+                .iter()
+                .find(|i| i.confirmation == Confirmation::Pending)
+                .map(|i| i.id)
+                .expect("an item that needs a confirmation");
+            let unconfirmed = Selection {
+                ids: vec![medium],
+                ..Selection::default()
+            };
+            assert!(clean_run::final_plan(&report, &unconfirmed, &ctx, &catalog).is_err());
+            let confirmed = Selection {
+                ids: vec![medium],
+                confirmed: vec![medium],
+                ..Selection::default()
+            };
+            assert!(clean_run::final_plan(&report, &confirmed, &ctx, &catalog).is_ok());
+        }
+
         fn clean(argv: &[&str]) -> Result<String, CliError> {
             clean_with(
                 argv,
